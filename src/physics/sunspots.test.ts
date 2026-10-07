@@ -11,6 +11,7 @@ import {
   spotTemperatures,
   surfaceFluxCompensation,
   sunspotsSupported,
+  type SpotPlanOptions,
 } from '@/physics/sunspots'
 import type { StarStats } from '@/types/star'
 import { SECONDS_PER_DAY, SOLAR_LUMINOSITY, SOLAR_MASS, SOLAR_RADIUS, SOLAR_TEMPERATURE } from '@/physics/relations'
@@ -126,28 +127,59 @@ describe('mulberry32', () => {
 })
 
 describe('planRegion', () => {
-  it('produces one or two spots in a single active belt', () => {
+  const surfaceArea = 4 * Math.PI * SOLAR_RADIUS * SOLAR_RADIUS
+  const options = (overrides: Partial<SpotPlanOptions> = {}): SpotPlanOptions => ({
+    activity: 0.8,
+    surfaceArea,
+    maxSpotAreaFraction: MAX_SPOT_AREA_FRACTION,
+    meanSpotsPerRegion: 6,
+    beltCenterLatitude: 17.5 * DEG,
+    beltHalfWidth: 7 * DEG,
+    ...overrides,
+  })
+
+  it('produces a multi-spot bipolar group within one active belt', () => {
     const random = mulberry32(7)
-    const surfaceArea = 4 * Math.PI * SOLAR_RADIUS * SOLAR_RADIUS
+    let sawMultiple = false
     for (let i = 0; i < 50; i++) {
-      const spots = planRegion(random, 0.8, surfaceArea)
+      const spots = planRegion(random, options())
       expect(spots.length).toBeGreaterThanOrEqual(1)
-      expect(spots.length).toBeLessThanOrEqual(2)
+      expect(spots.length).toBeLessThanOrEqual(12)
+      if (spots.length > 1) sawMultiple = true
       const primary = spots[0]
       expect(primary).toBeDefined()
       if (!primary) continue
       expect(Math.abs(primary.latitude)).toBeGreaterThan(5 * DEG)
-      expect(Math.abs(primary.latitude)).toBeLessThan(30 * DEG)
-      expect(primary.lifetimeSeconds).toBeGreaterThan(3 * SECONDS_PER_DAY)
-      expect(primary.maxArea).toBeLessThanOrEqual(MAX_SPOT_AREA_FRACTION * surfaceArea + 1)
+      expect(Math.abs(primary.latitude)).toBeLessThan(31 * DEG)
+      expect(primary.lifetimeSeconds).toBeGreaterThan(0)
       for (const spot of spots) {
+        expect(spot.maxArea).toBeLessThanOrEqual(MAX_SPOT_AREA_FRACTION * surfaceArea + 1)
+        expect(spot.lifetimeSeconds).toBeGreaterThan(0)
+        expect(Math.abs(spot.latitude)).toBeLessThan(80 * DEG)
         expect(Math.sign(spot.latitude)).toBe(Math.sign(primary.latitude))
+        expect(spot.umbraFraction).toBeGreaterThanOrEqual(0.32)
+        expect(spot.umbraFraction).toBeLessThanOrEqual(1)
       }
     }
+    expect(sawMultiple).toBe(true)
+  })
+
+  it('produces a larger share of very small pores than of dominant spots', () => {
+    const random = mulberry32(11)
+    let pores = 0
+    let large = 0
+    for (let i = 0; i < 200; i++) {
+      for (const spot of planRegion(random, options())) {
+        const fraction = spot.maxArea / surfaceArea
+        if (fraction < MAX_SPOT_AREA_FRACTION * 0.15) pores += 1
+        if (fraction > MAX_SPOT_AREA_FRACTION * 0.5) large += 1
+      }
+    }
+    expect(pores).toBeGreaterThan(large)
   })
 
   it('produces no area at zero activity', () => {
-    const spots = planRegion(mulberry32(1), 0, 4 * Math.PI * SOLAR_RADIUS * SOLAR_RADIUS)
+    const spots = planRegion(mulberry32(1), options({ activity: 0 }))
     for (const spot of spots) {
       expect(spot.maxArea).toBe(0)
     }

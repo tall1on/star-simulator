@@ -6,9 +6,13 @@ import { SECONDS_PER_DAY, clamp } from '@/physics/relations'
  *
  * Sunspots are cool, magnetically concentrated patches of photosphere. This
  * module provides a *solar-calibrated approximation* of their behaviour — not a
- * magnetohydrodynamic simulation: emergence statistics, a growth/decay
- * lifecycle, latitude-dependent (differential) rotation, and temperature-derived
- * contrast. All lengths are SI; angles in radians.
+ * magnetohydrodynamic simulation: active-region emergence statistics, a
+ * growth/decay lifecycle, latitude-dependent (differential) rotation, and
+ * temperature-derived contrast. All lengths are SI; angles in radians.
+ *
+ * The emergence *rate*, region *multiplicity* and latitude belt are supplied by
+ * {@link spotActivityModel} (the Rossby-number activity model), so a single
+ * active region is planned from those statistics plus a seeded RNG.
  */
 
 /**
@@ -23,13 +27,24 @@ const SOLAR_ROTATION_C = -1.787
 /** Above this effective temperature the convective envelope is too shallow for spots. */
 const MAX_SPOT_TEMPERATURE = 8000
 
-/** Penumbral area of the largest spots, as a fraction of the photospheric surface area. */
-export const MAX_SPOT_AREA_FRACTION = 2e-4
-/** Smallest spots are this fraction of the largest, so sizes span ~20×. */
-const MIN_SPOT_AREA_RATIO = 0.05
+/** Default penumbral area of the largest spots, as a fraction of the photospheric surface area. */
+export const MAX_SPOT_AREA_FRACTION = 2.2e-4
 /** Umbra ≈ 0.66·T_eff (Sun: ~3810 K) and penumbra ≈ 0.87·T_eff (Sun: ~5020 K). */
 const UMBRA_TEMPERATURE_RATIO = 0.66
 const PENUMBRA_TEMPERATURE_RATIO = 0.87
+
+/**
+ * Base active-region area scale. A region's penumbral area is
+ * `BASE · 10^u · activity · surfaceArea` with u ∈ [0, 1), giving a geometric
+ * spread of small groups to rare large ones (arithmetic mean ≈ 3.8× the base).
+ * Calibrated so the Sun at solar maximum covers ~0.2–0.3 % of the photosphere.
+ */
+const BASE_REGION_AREA_FRACTION = 5.5e-5
+
+/** Smallest spot lifetime, days. */
+const MIN_SPOT_LIFETIME_DAYS = 0.5
+/** Additional lifetime at maximum size, days. */
+const SPOT_LIFETIME_SPAN_DAYS = 29.5
 
 const DEG_TO_RAD = Math.PI / 180
 
@@ -126,38 +141,81 @@ export interface PlannedSpot {
   umbraFraction: number
 }
 
+/** Statistics and geometry needed to plan one active region. */
+export interface SpotPlanOptions {
+  /** Emergence level in [0, 1]; scales region rate and area. */
+  activity: number
+  /** Photospheric surface area, m². */
+  surfaceArea: number
+  /** Largest single penumbral area as a fraction of the surface area. */
+  maxSpotAreaFraction: number
+  /** Mean number of individual spots per active region. */
+  meanSpotsPerRegion: number
+  /** Active-belt centre latitude, radians. */
+  beltCenterLatitude: number
+  /** Active-belt half-width, radians. */
+  beltHalfWidth: number
+}
+
+/** Latitude beyond which we don't place ordinary solar-type spots. */
+const MAX_SPOT_LATITUDE = 80 * DEG_TO_RAD
+
 /**
- * Plan one active region from a seeded RNG. Spots emerge in two active belts
- * (butterfly migration is intentionally not modelled yet) and larger spots live
- * longer. A trailing companion spot is often present (bipolar region).
+ * Plan one active region from a seeded RNG. A region is a bipolar group: a
+ * dominant leading spot plus a scatter of trailing spots and small pores, all
+ * within a few degrees of the active-latitude belt. Larger spots live longer.
  */
-export function planRegion(random: () => number, activity: number, surfaceArea: number): PlannedSpot[] {
+export function planRegion(random: () => number, options: SpotPlanOptions): PlannedSpot[] {
+  const activity = clamp(options.activity, 0, 1)
   const hemisphere = random() < 0.5 ? -1 : 1
-  const latitude = hemisphere * (8 + 20 * random()) * DEG_TO_RAD
-  const longitude = 2 * Math.PI * random()
+  const centerLatitude = options.beltCenterLatitude + (random() * 2 - 1) * options.beltHalfWidth
+  const baseLatitude = clamp(hemisphere * centerLatitude, -MAX_SPOT_LATITUDE, MAX_SPOT_LATITUDE)
+  const baseLongitude = 2 * Math.PI * random()
 
-  const sizeRoll = random()
-  const areaFraction =
-    MAX_SPOT_AREA_FRACTION *
-    clamp(activity, 0, 1) *
-    (MIN_SPOT_AREA_RATIO + (1 - MIN_SPOT_AREA_RATIO) * sizeRoll * sizeRoll)
-  const maxArea = areaFraction * surfaceArea
-  const lifetimeScale = Math.sqrt(areaFraction / MAX_SPOT_AREA_FRACTION)
-  const lifetimeSeconds = (3 + 27 * lifetimeScale) * SECONDS_PER_DAY
-  const umbraFraction = 0.35 + 0.15 * random()
+  // Group multiplicity: roughly `meanSpotsPerRegion`, from a small region up to
+  // a complex one. Always at least one spot.
+  const count = Math.max(1, Math.round(options.meanSpotsPerRegion * (0.4 + 1.2 * random())))
 
-  const primary: PlannedSpot = { latitude, longitude, maxArea, lifetimeSeconds, umbraFraction }
-  const spots: PlannedSpot[] = [primary]
+  // Total penumbral area of the region, geometric in the region size.
+  const maxAreaFraction = options.maxSpotAreaFraction
+  const regionAreaFraction = clamp(
+    BASE_REGION_AREA_FRACTION * 10 ** random() * activity,
+    0,
+    maxAreaFraction * count,
+  )
+  const regionArea = regionAreaFraction * options.surfaceArea
 
-  if (random() < 0.6) {
-    const companionScale = 0.25 + 0.4 * random()
-    spots.push({
-      latitude: latitude - hemisphere * (1 + 3 * random()) * DEG_TO_RAD,
-      longitude: longitude + (2 + 6 * random()) * DEG_TO_RAD,
-      maxArea: maxArea * companionScale,
-      lifetimeSeconds: lifetimeSeconds * 0.8,
-      umbraFraction: 0.32 + 0.15 * random(),
-    })
+  // Distribute area with a top-heavy weight so each group has one or two large
+  // spots and a scatter of pores.
+  const weights: number[] = []
+  let weightSum = 0
+  for (let i = 0; i < count; i++) {
+    const weight = 0.08 + random() * random() * 1.2
+    weights.push(weight)
+    weightSum += weight
+  }
+
+  const span = (3 + 1.2 * count) * DEG_TO_RAD
+  const spots: PlannedSpot[] = []
+  for (let i = 0; i < count; i++) {
+    const weight = weights[i] ?? 0
+    const area = weightSum > 0 ? regionArea * (weight / weightSum) : 0
+    const maxArea = Math.min(area, maxAreaFraction * options.surfaceArea)
+    const sizeRank = clamp(maxArea / (maxAreaFraction * options.surfaceArea), 0, 1)
+
+    const latitude = clamp(
+      baseLatitude + (random() * 2 - 1) * 2.5 * DEG_TO_RAD,
+      -MAX_SPOT_LATITUDE,
+      MAX_SPOT_LATITUDE,
+    )
+    const longitude = baseLongitude + (random() - 0.5) * span
+
+    // Pores (small spots) are mostly umbra; large spots have a proper penumbra.
+    const umbraFraction = clamp(0.34 + 0.14 * random() + (1 - sizeRank) * 0.28, 0.32, 1)
+    const lifetimeScale = Math.sqrt(sizeRank)
+    const lifetimeSeconds = (MIN_SPOT_LIFETIME_DAYS + SPOT_LIFETIME_SPAN_DAYS * lifetimeScale) * SECONDS_PER_DAY
+
+    spots.push({ latitude, longitude, maxArea, lifetimeSeconds, umbraFraction })
   }
 
   return spots
@@ -166,8 +224,7 @@ export function planRegion(random: () => number, activity: number, surfaceArea: 
 /**
  * Multiplier that keeps the total photospheric flux roughly constant as spotted
  * area grows. `coverage` is the spotted fraction of the surface and
- * `meanSpotRadiance` the area-averaged spot radiance ratio. Tiny in practice
- * (spots cover well under 1% of the disc).
+ * `meanSpotRadiance` the area-averaged spot radiance ratio.
  */
 export function surfaceFluxCompensation(coverage: number, meanSpotRadiance: number): number {
   const deficit = clamp(coverage, 0, 0.5) * (1 - clamp(meanSpotRadiance, 0, 1))

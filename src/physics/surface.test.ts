@@ -16,22 +16,24 @@ function stats(overrides: Partial<StarStats> = {}): StarStats {
 }
 
 describe('surfaceModel', () => {
-  it('gives the Sun a ~290 km scale height and solar-scale granulation', () => {
+  it('gives the Sun a ~290 km scale height and fine solar-scale granulation', () => {
     const model = surfaceModel(stats(), 'main-sequence')
     expect(model.scaleHeight).toBeGreaterThan(2.2e5)
     expect(model.scaleHeight).toBeLessThan(3.6e5)
     expect(model.relativeCellSize).toBeCloseTo(1, 1)
     expect(model.regime).toBe('dwarf')
-    expect(model.cellFrequency).toBeGreaterThan(6)
-    expect(model.cellFrequency).toBeLessThan(9)
+    expect(model.cellFrequency).toBeGreaterThan(40)
+    expect(model.cellFrequency).toBeLessThan(200)
     expect(model.giantBlend).toBeLessThan(0.05)
+    expect(model.laneDarkness).toBeGreaterThan(0.3)
+    expect(model.brightnessVariation).toBeGreaterThan(0.2)
   })
 
   it('gives a cool giant large cells, broad dark regions and slow evolution', () => {
     const giant = surfaceModel(stats({ radius: 100 * SOLAR_RADIUS, temperature: 4000 }), 'main-sequence')
     expect(giant.regime).toBe('giant')
     expect(giant.giantBlend).toBeGreaterThan(0.9)
-    expect(giant.cellFrequency).toBeLessThan(3)
+    expect(giant.cellFrequency).toBeLessThan(12)
     expect(giant.darkRegion).toBeGreaterThan(0.6)
     expect(giant.evolution).toBeLessThan(0.3)
     expect(giant.relativeCellSize).toBeGreaterThan(10)
@@ -55,6 +57,7 @@ describe('surfaceModel', () => {
     expect(compact.contrast).toBeLessThan(0.1)
     expect(compact.spotStrength).toBe(0)
     expect(compact.darkRegion).toBe(0)
+    expect(compact.laneDarkness).toBe(0)
   })
 
   it('makes cells larger as radius grows at fixed mass and temperature', () => {

@@ -79,10 +79,10 @@ export function createLensedSurface(): LensedSurface {
   const spotColor = mix(sunspots.penumbraColor, sunspots.umbraColor, spot.umbraMix)
   const spotRadiance = mix(sunspots.penumbraRadiance, sunspots.umbraRadiance, spot.umbraMix)
   const surfaceColor = mix(quietColor, spotColor, spot.cover)
-  const spotBrightness = mix(float(1), spotRadiance, spot.cover)
+  const radiance = mix(sample.brightness, spotRadiance, spot.cover)
 
   const edgeFade = smoothstep(bMax.mul(1.0), bMax.mul(0.97), bOverR)
-  const brightness = limb.mul(sample.brightness).mul(spotBrightness).mul(redshift).mul(edgeFade)
+  const brightness = limb.mul(radiance).mul(redshift).mul(edgeFade)
   const colorNode = surfaceColor.mul(brightness).mul(uIntensity).mul(sunspots.fluxScale)
 
   const material = new THREE.MeshBasicNodeMaterial()

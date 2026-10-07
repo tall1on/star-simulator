@@ -14,6 +14,11 @@ function config(overrides: Partial<SunspotConfig> = {}): SunspotConfig {
     radius: SOLAR_RADIUS,
     temperature: 5772,
     supported: true,
+    regionsPerDayAtMax: 1,
+    meanSpotsPerRegion: 6,
+    maxSpotAreaFraction: 2.2e-4,
+    beltCenterLatitude: (17.5 * Math.PI) / 180,
+    beltHalfWidth: (7 * Math.PI) / 180,
     ...overrides,
   }
 }
@@ -200,5 +205,21 @@ describe('SunspotSimulation reset', () => {
     a.advance(3_000_000)
     expect(a.spotCount).toBe(b.spotCount)
     expect(a.elapsedDays).toBe(b.elapsedDays)
+  })
+})
+
+describe('SunspotSimulation solar-maximum population', () => {
+  it('produces many individual spots at solar maximum', () => {
+    const simulation = seeded()
+    simulation.advance(5_000_000)
+    expect(simulation.spotCount).toBeGreaterThan(11)
+  })
+
+  it('keeps the spotted area physically plausible', () => {
+    const simulation = seeded()
+    simulation.advance(5_000_000)
+    simulation.render()
+    expect(simulation.surfaceCoverage).toBeGreaterThan(0.0003)
+    expect(simulation.surfaceCoverage).toBeLessThan(0.02)
   })
 })

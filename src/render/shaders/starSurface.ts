@@ -83,18 +83,25 @@ export function createStarSurface(): StarSurface {
   const mu = saturate(dot(normalWorld, viewDir))
   const limb = oneMinus(uLimb.mul(oneMinus(mu)))
 
-  // Limb reddening: cooler, redder plasma toward the edge.
-  const limbRedden = mix(vec3(1, 1, 1), vec3(1.0, 0.5, 0.24), oneMinus(mu).mul(0.55))
-  const faculae = saturate(oneMinus(mu).mul(1.4)).mul(sample.brightness).mul(0.12)
+  // Limb reddening: slightly cooler, redder plasma toward the edge (mild — the
+  // overall colour still comes from the star's blackbody T_eff).
+  const limbRedden = mix(vec3(1, 1, 1), vec3(1.0, 0.72, 0.5), oneMinus(mu).mul(0.28))
 
-  // Spots replace the quiet photosphere by their own (cooler) blackbody.
+  // Spots replace the granulated photosphere by their own cooler blackbody, so
+  // granulation contrast does not modulate the interior of a spot.
   const quietColor = vec3(uColor).mul(sample.tint)
   const spotColor = mix(sunspots.penumbraColor, sunspots.umbraColor, spot.umbraMix)
   const spotRadiance = mix(sunspots.penumbraRadiance, sunspots.umbraRadiance, spot.umbraMix)
   const surfaceColor = mix(quietColor, spotColor, spot.cover)
-  const spotBrightness = mix(float(1), spotRadiance, spot.cover)
+  const radiance = mix(sample.brightness, spotRadiance, spot.cover)
 
-  const brightness = limb.mul(sample.brightness).mul(spotBrightness).add(faculae)
+  // Faculae: bright magnetic regions hugging the spots, strongest at the limb.
+  const faculae = spot.plage
+    .mul(oneMinus(spot.cover))
+    .mul(saturate(oneMinus(mu).mul(1.2)))
+    .mul(0.28)
+
+  const brightness = limb.mul(radiance).add(faculae)
   const colorNode = surfaceColor.mul(limbRedden).mul(brightness).mul(uIntensity).mul(sunspots.fluxScale)
 
   const material = new THREE.MeshBasicNodeMaterial()

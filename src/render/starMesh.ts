@@ -17,6 +17,11 @@ export interface StarObject {
   setOblateness(flattening: number): void
   /** Physics-driven convection/spot parameters from {@link surfaceModel}. */
   setSurfaceModel(params: SurfaceModelParams): void
+  /**
+   * Angular rate (rad/s of scene time) at which the convective pattern is
+   * advected, so granulation rotates with the star and the evolving spots.
+   */
+  setConvectionRate(rate: number): void
   /** Upload the evolving sunspots and the current spotted area fraction. */
   setSunspots(spots: readonly SunspotRenderData[], coverage: number): void
   applyStats(stats: StarStats, mode: ViewMode): void
@@ -72,6 +77,7 @@ export function createStar(): StarObject {
   let compactness = 0.25
   let flattening = 0
   let surfaceModel: SurfaceModelParams = DEFAULT_SURFACE_MODEL
+  let convectionRate = 0.12
 
   // Scratch objects for billboard orientation (avoid per-frame allocations).
   const viewAxis = new THREE.Vector3()
@@ -114,6 +120,11 @@ export function createStar(): StarObject {
     lensed.setSurfaceModel(params)
   }
 
+  function setConvectionRate(rate: number): void {
+    convectionRate = clamp(rate, 0, 50)
+    if (kind === 'sphere') sphere.setDifferentialRotation(convectionRate)
+  }
+
   function setSunspots(spots: readonly SunspotRenderData[], coverage: number): void {
     sphere.setSunspots(spots, coverage)
     lensed.setSunspots(spots, coverage)
@@ -135,7 +146,7 @@ export function createStar(): StarObject {
     sphere.setColor(color)
     sphere.setIntensity(intensity)
     sphere.setLimbDarkening(lensedNeutronStar ? 0.35 : 0.62)
-    sphere.setDifferentialRotation(lensedNeutronStar ? 0.03 : 0.12)
+    sphere.setDifferentialRotation(lensedNeutronStar ? 0.03 : convectionRate)
     sphere.setSurfaceModel(surfaceModel)
     sphere.setSunspotColors(spotColors, spotRadiance)
 
@@ -192,5 +203,17 @@ export function createStar(): StarObject {
 
   setKind('sphere')
 
-  return { group, setKind, setSceneRadius, setOblateness, setSurfaceModel, setSunspots, applyStats, setCoronaVisible, update, dispose }
+  return {
+    group,
+    setKind,
+    setSceneRadius,
+    setOblateness,
+    setSurfaceModel,
+    setConvectionRate,
+    setSunspots,
+    applyStats,
+    setCoronaVisible,
+    update,
+    dispose,
+  }
 }

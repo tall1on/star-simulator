@@ -8,6 +8,7 @@ function spot(overrides: Partial<SunspotRenderData> = {}): SunspotRenderData {
     direction: [0, 1, 0],
     angularRadius: 0.05,
     umbraFraction: 0.4,
+    plageAngularRadius: 0.08,
     weight: 0.8,
     ...overrides,
   }
@@ -24,7 +25,8 @@ describe('createSunspots', () => {
     const sample = layer.evaluate(vec3(0, 1, 0))
     expect(sample.cover).toBeDefined()
     expect(sample.umbraMix).toBeDefined()
-    expect(MAX_RENDERED_SUNSPOTS).toBe(16)
+    expect(sample.plage).toBeDefined()
+    expect(MAX_RENDERED_SUNSPOTS).toBe(48)
   })
 
   it('ignores more spots than the shader capacity', () => {

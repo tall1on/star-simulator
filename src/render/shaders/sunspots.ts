@@ -4,6 +4,7 @@ import {
   float,
   max,
   oneMinus,
+  sin,
   smoothstep,
   uniform,
   uniformArray,
@@ -14,6 +15,10 @@ import { MAX_RENDERED_SUNSPOTS, type SunspotRenderData } from '@/types/sunspots'
 
 /** Representative umbra/penumbra area split used for the flux-balance estimate. */
 const MEAN_UMBRA_FRACTION = 0.4
+/** Relative c-space softness of a cap edge (keeps edges antialiased, not blurry). */
+const EDGE_SOFTNESS = 0.35
+/** Amplitude of the per-spot irregular-edge wobble. */
+const EDGE_WOBBLE = 0.06
 
 export interface SunspotColors {
   penumbra: readonly [number, number, number]
@@ -30,6 +35,8 @@ export interface SunspotSample {
   cover: THREE.Node<'float'>
   /** How deep into the umbra the direction is, 0…1. */
   umbraMix: THREE.Node<'float'>
+  /** Facular/plage proximity, 0…1 (bright magnetic regions around spots). */
+  plage: THREE.Node<'float'>
 }
 
 export interface SunspotLayer {
@@ -52,8 +59,10 @@ export interface SunspotLayer {
  * Evolving sunspot layer shared by the spherical and lensed photospheres.
  *
  * Each spot is a circular cap stored as a unit direction plus the cosines of its
- * penumbra and umbra angular radii, so the shader needs only a dot product and a
- * couple of smoothsteps per spot. Overlaps combine with `max`, never by
+ * facular, penumbral and umbral angular radii, so the shader needs only a dot
+ * product and a few smoothsteps per spot. A cheap trigonometric wobble, seeded
+ * from the spot direction, makes the boundaries irregular (real spots are not
+ * perfect circles) without a noise lookup. Overlaps combine with `max`, never by
  * summing, so overlapping spots never double-darken. Colours and radiances come
  * from the blackbody of the spot temperature (set by the caller), not a
  * hand-picked tint.
@@ -64,7 +73,7 @@ export function createSunspots(): SunspotLayer {
     'vec3',
   )
   const params = uniformArray<'vec4'>(
-    Array.from({ length: MAX_RENDERED_SUNSPOTS }, () => new THREE.Vector4(0, 1, 0, 0)),
+    Array.from({ length: MAX_RENDERED_SUNSPOTS }, () => new THREE.Vector4(1, 1, 0, 1)),
     'vec4',
   )
 
@@ -87,26 +96,39 @@ export function createSunspots(): SunspotLayer {
   function evaluate(dir: THREE.Node<'vec3'>): SunspotSample {
     const cover = float(0).toVar()
     const umbraMix = float(0).toVar()
+    const plage = float(0).toVar()
 
     for (let i = 0; i < MAX_RENDERED_SUNSPOTS; i++) {
-      const c = dot(dir, dirs.element(i))
+      const d = dirs.element(i)
+      const c = dot(dir, d)
       const p = params.element(i)
       const cosPenumbra = p.x
       const cosUmbra = p.y
       const weight = p.z
+      const cosPlage = p.w
 
-      // Mask is faded by `weight` so emergence/decay don't pop; the physical
-      // size change comes from the angular radius (which follows the area).
-      const penumbraSoftness = oneMinus(cosPenumbra).mul(0.5)
-      const penumbraMask = smoothstep(cosPenumbra.sub(penumbraSoftness), cosPenumbra, c).mul(weight)
-      const umbraSoftness = oneMinus(cosUmbra).mul(0.5)
-      const umbraMask = smoothstep(cosUmbra.sub(umbraSoftness), cosUmbra, c).mul(weight)
+      // Irregular boundary: a cheap deterministic wobble seeded from the spot
+      // direction, applied in cosine space so it scales with the cap size.
+      const seed = d.x.mul(31.7).add(d.y.mul(17.3)).add(d.z.mul(53.1))
+      const wobble = sin(dir.x.mul(13.0).add(seed))
+        .mul(sin(dir.y.mul(11.0).add(seed.mul(1.7))))
+        .mul(sin(dir.z.mul(9.0).sub(seed.mul(0.9))))
+      const edge = oneMinus(c).mul(EDGE_WOBBLE)
+      const cw = c.add(wobble.mul(edge))
+
+      const penumbraSoftness = oneMinus(cosPenumbra).mul(EDGE_SOFTNESS)
+      const penumbraMask = smoothstep(cosPenumbra.sub(penumbraSoftness), cosPenumbra, cw).mul(weight)
+      const umbraSoftness = oneMinus(cosUmbra).mul(EDGE_SOFTNESS)
+      const umbraMask = smoothstep(cosUmbra.sub(umbraSoftness), cosUmbra, cw).mul(weight)
+      const plageSoftness = oneMinus(cosPlage).mul(EDGE_SOFTNESS)
+      const plageMask = smoothstep(cosPlage.sub(plageSoftness), cosPlage, cw).mul(weight)
 
       cover.assign(max(cover, penumbraMask))
       umbraMix.assign(max(umbraMix, umbraMask))
+      plage.assign(max(plage, plageMask))
     }
 
-    return { cover, umbraMix }
+    return { cover, umbraMix, plage }
   }
 
   function setSpots(spots: readonly SunspotRenderData[], coverage: number): void {
@@ -121,15 +143,22 @@ export function createSunspots(): SunspotLayer {
       if (spot === undefined || dir === undefined || p === undefined) continue
       const [x, y, z] = spot.direction
       dir.set(x, y, z).normalize()
-      const angularRadius = Math.min(spot.angularRadius, Math.PI / 2)
-      p.set(Math.cos(angularRadius), Math.cos(angularRadius * spot.umbraFraction), spot.weight, 0)
+      const penumbraRadius = Math.min(spot.angularRadius, Math.PI / 2)
+      const plageRadius = Math.min(spot.plageAngularRadius, Math.PI / 2)
+      p.set(
+        Math.cos(penumbraRadius),
+        Math.cos(penumbraRadius * spot.umbraFraction),
+        spot.weight,
+        Math.cos(plageRadius),
+      )
     }
     for (let i = count; i < MAX_RENDERED_SUNSPOTS; i++) {
       const p = paramArray[i]
       if (p !== undefined) p.z = 0
     }
 
-    const meanSpotRadiance = penumbraRadianceValue * (1 - MEAN_UMBRA_FRACTION) + umbraRadianceValue * MEAN_UMBRA_FRACTION
+    const meanSpotRadiance =
+      penumbraRadianceValue * (1 - MEAN_UMBRA_FRACTION) + umbraRadianceValue * MEAN_UMBRA_FRACTION
     uFluxScale.value = surfaceFluxCompensation(coverage, meanSpotRadiance)
   }
 

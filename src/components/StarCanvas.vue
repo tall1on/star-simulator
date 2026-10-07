@@ -13,7 +13,7 @@ import { OrbitCameraController } from '@/render/camera'
 import { clamp, densityFromMassRadius } from '@/physics/relations'
 import { rotationShape } from '@/physics/rotation'
 import { surfaceModel } from '@/physics/surface'
-import { sunspotsSupported } from '@/physics/sunspots'
+import { spotActivityModel } from '@/physics/activity'
 import { SunspotSimulation } from '@/simulation/sunspotSimulation'
 import { useStarStore } from '@/stores/star'
 import { useSimulationStore } from '@/stores/simulation'
@@ -121,18 +121,40 @@ function syncSurface(): void {
   const impliedDensity = densityFromMassRadius(stats.value.mass, stats.value.radius)
   starObject?.setOblateness(rotationShape(windParams.value.rotationPeriod, impliedDensity).flattening)
   starObject?.setSurfaceModel(surfaceModel(stats.value, typeId.value))
+  starObject?.setConvectionRate(currentConvectionRate())
+}
+
+/**
+ * Scene-time angular rate of the convective pattern: the star's equatorial
+ * rotation, sped up by the sunspot surface-time multiplier, so granulation
+ * drifts in step with the evolving spots.
+ */
+function currentConvectionRate(): number {
+  const periodDays = Math.max(windParams.value.rotationPeriod, 1e-3)
+  return (2 * Math.PI * sunspots.speedDaysPerSecond) / periodDays
+}
+
+function currentActivityModel(): ReturnType<typeof spotActivityModel> {
+  return spotActivityModel(stats.value, typeId.value, windParams.value.rotationPeriod, sunspots.cyclePhase)
 }
 
 function syncSunspotConfig(): void {
+  const model = currentActivityModel()
+  const activity = sunspots.autoActivity ? model.relativeActivity : sunspots.activity
   sunspotSimulation.configure({
     enabled: sunspots.enabled,
     running: sunspots.running,
-    activity: sunspots.activity,
+    activity,
     speedDaysPerSecond: sunspots.speedDaysPerSecond,
     rotationPeriodDays: windParams.value.rotationPeriod,
     radius: stats.value.radius,
     temperature: stats.value.temperature,
-    supported: sunspotsSupported(stats.value, typeId.value),
+    supported: model.supported,
+    regionsPerDayAtMax: model.regionsPerDayAtMax,
+    meanSpotsPerRegion: model.meanSpotsPerRegion,
+    maxSpotAreaFraction: model.maxSpotAreaFraction,
+    beltCenterLatitude: model.belt.center,
+    beltHalfWidth: model.belt.halfWidth,
   })
 }
 
@@ -151,7 +173,11 @@ function updateSunspots(delta: number): void {
   sunspotReportAccumulator += delta
   if (sunspotReportAccumulator >= 0.25) {
     sunspotReportAccumulator = 0
-    sunspots.report(sunspotSimulation.spotCount, sunspotSimulation.elapsedDays)
+    sunspots.report(
+      sunspotSimulation.spotCount,
+      sunspotSimulation.elapsedDays,
+      sunspotSimulation.surfaceCoverage,
+    )
   }
 }
 
@@ -298,21 +324,26 @@ watch(
   () => [
     sunspots.enabled,
     sunspots.running,
+    sunspots.autoActivity,
     sunspots.activity,
+    sunspots.cyclePhase,
     sunspots.speedDaysPerSecond,
     windParams.value.rotationPeriod,
     stats.value.radius,
     stats.value.temperature,
     typeId.value,
   ],
-  () => syncSunspotConfig(),
+  () => {
+    syncSunspotConfig()
+    syncSurface()
+  },
 )
 watch(
   () => sunspots.resetRequestId,
   () => {
     sunspotSimulation.reset()
     starObject?.setSunspots(EMPTY_SUNSPOTS, 0)
-    sunspots.report(0, 0)
+    sunspots.report(0, 0, 0)
   },
 )
 watch(typeId, () => {

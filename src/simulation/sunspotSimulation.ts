@@ -11,14 +11,18 @@ import {
   mulberry32,
   planRegion,
   spotGrowthFraction,
+  type SpotPlanOptions,
 } from '@/physics/sunspots'
 
-/** Active regions emerging per simulated day at full activity. */
-export const BASE_REGIONS_PER_DAY = 0.35
 /** Hard cap on simultaneously tracked spots (keeps the per-frame work bounded). */
-export const MAX_ACTIVE_SPOTS = 48
+export const MAX_ACTIVE_SPOTS = 256
 /** Fixed seed so every session and every reset starts identically. */
 const SIMULATION_SEED = 0x5eed
+/**
+ * Simulated days the surface clock is wound forward on first use so the disc
+ * starts with a realistic steady-state spot population (a few mean lifetimes).
+ */
+const SPIN_UP_DAYS = 30
 
 const DEFAULT_CONFIG: SunspotConfig = {
   enabled: true,
@@ -29,6 +33,11 @@ const DEFAULT_CONFIG: SunspotConfig = {
   radius: SOLAR_RADIUS,
   temperature: 5772,
   supported: false,
+  regionsPerDayAtMax: 1,
+  meanSpotsPerRegion: 6,
+  maxSpotAreaFraction: 2.2e-4,
+  beltCenterLatitude: (30 - 25 * 0.5) * (Math.PI / 180),
+  beltHalfWidth: 7 * (Math.PI / 180),
 }
 
 /** Scratch entry for sorting spots by size before rendering. */
@@ -46,6 +55,10 @@ interface RenderedEntry {
  * push per-frame arrays through Vue reactivity. The Pinia store owns the
  * controls; this object owns the evolving spots. Longitudes are integrated
  * incrementally, so changing the rotation speed never makes spots jump.
+ *
+ * On first use the surface is *pre-populated* by running the clock forward a
+ * few mean lifetimes, so a supported star shows a realistic spot population
+ * immediately rather than starting from an empty disc.
  */
 export class SunspotSimulation {
   private elapsedSeconds = 0
@@ -56,6 +69,7 @@ export class SunspotSimulation {
   private random = mulberry32(SIMULATION_SEED)
   private config: SunspotConfig = { ...DEFAULT_CONFIG }
   private coverage = 0
+  private populated = false
 
   /** Reused output buffer and scratch pools so the per-frame path allocates nothing. */
   private readonly renderBuffer: SunspotRenderData[] = []
@@ -66,6 +80,7 @@ export class SunspotSimulation {
   configure(next: SunspotConfig): void {
     if (!next.supported && this.config.supported) {
       this.clear()
+      this.populated = false
     }
     this.config = { ...next }
   }
@@ -78,6 +93,7 @@ export class SunspotSimulation {
     this.random = mulberry32(SIMULATION_SEED)
     this.nextId = 1
     this.nextRegionId = 1
+    this.populated = false
   }
 
   private clear(): void {
@@ -108,17 +124,32 @@ export class SunspotSimulation {
     return this.spots
   }
 
+  /**
+   * Populate the surface on first use by advancing the surface clock through a
+   * few mean region lifetimes (the clock keeps ageing spots correctly, so this
+   * is a genuine steady-state sample, not a special case).
+   */
+  private ensurePopulated(): void {
+    if (this.populated) return
+    const { enabled, running, supported, activity } = this.config
+    if (!enabled || !running || !supported || activity <= 0) return
+    this.populated = true
+    this.advance(SPIN_UP_DAYS * SECONDS_PER_DAY)
+  }
+
   /** Advance by a real-time delta. No-op while disabled, paused or unsupported. */
   step(realDeltaSeconds: number): void {
     const { enabled, running, supported, speedDaysPerSecond } = this.config
     if (!enabled || !running || !supported) return
     if (!(realDeltaSeconds > 0)) return
+    this.ensurePopulated()
     this.advance(realDeltaSeconds * speedDaysPerSecond * SECONDS_PER_DAY)
   }
 
   /** Advance by an explicit simulated-time delta, seconds. */
   advance(simDeltaSeconds: number): void {
     if (!(simDeltaSeconds > 0)) return
+    this.ensurePopulated()
 
     const startSeconds = this.elapsedSeconds
     const endSeconds = startSeconds + simDeltaSeconds
@@ -138,6 +169,20 @@ export class SunspotSimulation {
     this.elapsedSeconds = endSeconds
 
     this.scheduleEmergence(startSeconds, endSeconds)
+    this.cullDead(endSeconds)
+  }
+
+  /** Drop spots whose life has ended (e.g. newborn spots that already decayed). */
+  private cullDead(endSeconds: number): void {
+    let write = 0
+    for (let read = 0; read < this.spots.length; read++) {
+      const spot = this.spots[read]
+      if (spot === undefined) continue
+      if (endSeconds - spot.birthSeconds >= spot.lifetimeSeconds) continue
+      this.spots[write] = spot
+      write += 1
+    }
+    this.spots.length = write
   }
 
   /**
@@ -150,7 +195,7 @@ export class SunspotSimulation {
     if (activity <= 0) return
 
     const dt = endSeconds - startSeconds
-    const regionsPerSecond = (BASE_REGIONS_PER_DAY * activity) / SECONDS_PER_DAY
+    const regionsPerSecond = (this.config.regionsPerDayAtMax * activity) / SECONDS_PER_DAY
     this.spawnAccumulator += regionsPerSecond * dt
 
     const events = Math.floor(this.spawnAccumulator)
@@ -173,11 +218,23 @@ export class SunspotSimulation {
 
   private spawnRegionAt(birthSeconds: number, endSeconds: number, activity: number): void {
     const surfaceArea = 4 * Math.PI * this.config.radius * this.config.radius
-    const planned = planRegion(this.random, activity, surfaceArea)
+    const options: SpotPlanOptions = {
+      activity,
+      surfaceArea,
+      maxSpotAreaFraction: this.config.maxSpotAreaFraction,
+      meanSpotsPerRegion: this.config.meanSpotsPerRegion,
+      beltCenterLatitude: this.config.beltCenterLatitude,
+      beltHalfWidth: this.config.beltHalfWidth,
+    }
+    const planned = planRegion(this.random, options)
     const regionId = this.nextRegionId
     this.nextRegionId += 1
     for (const plan of planned) {
       if (this.spots.length >= MAX_ACTIVE_SPOTS) break
+      // Skip spots that will already have decayed by the end of the interval.
+      // A single big step then yields the same surviving population as many
+      // small steps, instead of filling the cap with dead spots.
+      if (endSeconds - birthSeconds >= plan.lifetimeSeconds) continue
       const omega = angularVelocityAtLatitude(this.config.rotationPeriodDays, plan.latitude)
       this.spots.push({
         id: this.nextId,
@@ -200,6 +257,8 @@ export class SunspotSimulation {
    * allocates nothing.
    */
   render(): readonly SunspotRenderData[] {
+    this.ensurePopulated()
+
     const radius = Math.max(this.config.radius, Number.EPSILON)
     const surfaceArea = 4 * Math.PI * radius * radius
 
@@ -236,10 +295,12 @@ export class SunspotSimulation {
       if (buffer.length >= MAX_RENDERED_SUNSPOTS) break
       const { latitude, longitude, umbraFraction } = entry.spot
       const cosLatitude = Math.cos(latitude)
+      const plageAngularRadius = Math.min(entry.angularRadius * 1.6, Math.PI / 2)
       buffer.push({
         direction: [cosLatitude * Math.cos(longitude), Math.sin(latitude), cosLatitude * Math.sin(longitude)],
         angularRadius: entry.angularRadius,
         umbraFraction,
+        plageAngularRadius,
         weight: entry.weight,
       })
     }

@@ -35,6 +35,10 @@ export interface SurfaceModel {
   giantBlend: number
   /** Broad cooler convection regions (distinct from magnetic spots). */
   darkRegion: number
+  /** Depth of the dark intergranular lanes, 0…1. */
+  laneDarkness: number
+  /** Granule-to-granule brightness variation, 0…1. */
+  brightnessVariation: number
   /** Magnetic starspot strength. */
   spotStrength: number
   /** Relative cell-evolution speed (giant cells evolve slowly). */
@@ -86,6 +90,8 @@ export function surfaceModel(stats: StarStats, typeId: StarTypeId): SurfaceModel
       contrast: 0.08,
       giantBlend: 0,
       darkRegion: 0,
+      laneDarkness: 0,
+      brightnessVariation: 0.05,
       spotStrength: 0,
       evolution: 0.5,
       displacement: 0,
@@ -100,8 +106,10 @@ export function surfaceModel(stats: StarStats, typeId: StarTypeId): SurfaceModel
   const cellSizeRatio = cellSize / stats.radius
   const relativeCellSize = cellSizeRatio / SOLAR_CELL_RATIO
 
-  // Log-compress the raw cell count into a usable shader frequency.
-  const cellFrequency = clamp(2 + 3 * Math.log10(Math.max(cellsAcross, 1) / 10), 1.6, 22)
+  // Map the physical granule count to a shader frequency directly (not
+  // log-compressed): a Sun-like star resolves to fine granulation, while an
+  // extended giant keeps only a handful of large cells.
+  const cellFrequency = clamp(cellsAcross * 0.16, 4, 220)
   const giantBlend = smoothstep(30, 6, cellsAcross)
 
   const hot = stats.temperature > 12_000
@@ -110,6 +118,8 @@ export function surfaceModel(stats: StarStats, typeId: StarTypeId): SurfaceModel
   contrast = clamp(contrast, 0.05, 1.2)
 
   const darkRegion = giantBlend * 0.7
+  const laneDarkness = clamp(0.42 + 0.35 * (1 - giantBlend) - (hot ? 0.25 : 0), 0.1, 0.85)
+  const brightnessVariation = clamp(0.4 * (1 - giantBlend) + 0.08, 0.05, 0.6)
   const spotStrength = clamp((8000 - stats.temperature) / 6000, 0, 1) * (1 - 0.4 * giantBlend)
   const evolution = clamp(Math.sqrt(cellsAcross / 600), 0.12, 1.5)
 
@@ -127,6 +137,8 @@ export function surfaceModel(stats: StarStats, typeId: StarTypeId): SurfaceModel
     contrast,
     giantBlend,
     darkRegion,
+    laneDarkness,
+    brightnessVariation,
     spotStrength,
     evolution,
     displacement,

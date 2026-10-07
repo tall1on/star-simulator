@@ -24,8 +24,9 @@ An interactive, browser-based 3D star simulator. Pick a star type, tweak its phy
 - **Magnetic-field visualization** with real dynamics: a tilted dipole, closed coronal loops, active-region loops, open polar field lines stretched into a **Parker spiral** by the stellar wind, and plasma-flow particles tracing the open field — plus a **magnetar-style twist** that winds the whole magnetosphere into a helix under heavy rotation and/or a strong field
 - **Stellar-wind controls**: wind speed, mass-loss rate, rotation period and magnetic tilt — a faster wind straightens the field, faster rotation winds it up. Sub-second (millisecond) rotation periods are supported for compact stars.
 - **Rotation shapes the star**: centrifugal flattening is computed from real physics, `q = Ω²R³/(GM) = 3Ω²/(4πGρ)`, so a fast-spinning, low-density star visibly bulges into an oblate spheroid (and is flagged once it passes the mass-shedding limit).
-- **Physically driven surface inhomogeneity**: convection cell size follows the photospheric pressure scale height `H_p ≈ k_B·T/(μm_H·g)`, so cool giants get a few huge cells and broad cool regions while dwarfs keep fine granulation — and magnetic spots are kept separate from convective dark regions. Hot massive stars and compact objects are handled as their own regimes rather than being forced through the solar granulation law. Giant cells also produce **real 3D relief**: vertices are displaced by the convective height field (amplitude `≈1.5·H_p/R`) with a gradient-perturbed normal, so the photosphere has actual bumps and indentations visible on the limb.
-- **Evolving sunspot simulation**: individual active regions **emerge, grow, drift and decay** on their own surface clock (separate from stellar aging), with a dark **umbra** and warm **penumbra**. Spots follow the solar latitude-dependent (differential) rotation law — the equator races, the poles lag — and their colour and contrast come from the blackbody at the spot temperature (umbra ≈ 0.66·T_eff, penumbra ≈ 0.87·T_eff), not a hand-picked tint. Controls for activity level and surface-time speed; a solar-calibrated approximation (no 11-year cycle yet).
+- **Physically driven surface inhomogeneity**: convection cell size follows the photospheric pressure scale height `H_p ≈ k_B·T/(μm_H·g)`, so cool giants get a few huge cells and broad cool regions while dwarfs keep fine granulation — and magnetic spots are kept separate from convective dark regions. Granulation is rendered as irregular bright granules split by narrow dark **intergranular lanes** (two cellular-noise octaves plus a coarser network), with a fragment-level level-of-detail fade so a distant disc is smooth instead of shimmering. Hot massive stars and compact objects are handled as their own regimes rather than being forced through the solar granulation law. Giant cells also produce **real 3D relief**: vertices are displaced by the convective height field (amplitude `≈1.5·H_p/R`) with a gradient-perturbed normal, so the photosphere has actual bumps and indentations visible on the limb.
+- **Rotation-driven starspot population**: active regions **emerge, grow, drift and decay** on their own surface clock (separate from stellar aging), each a bipolar group of tens of small **pores** around one or two dominant spots, with a dark **umbra**, a warm **penumbra** and bright **faculae** hugging the plage. Spots have irregular (non-circular) boundaries, follow the solar latitude-dependent (differential) rotation law — the equator races, the poles lag — and their colour and contrast come from the blackbody at the spot temperature (umbra ≈ 0.66·T_eff, penumbra ≈ 0.87·T_eff), not a hand-picked tint. Their number and area come from a **Rossby-number activity model** (`Ro = P_rot/τ_conv`): a faster rotator is more spotted, and **Auto activity** derives the level from the star's rotation. At solar maximum the Sun shows several dozen individual spots and an estimated Wolf number R ≈ 150. A cycle-phase control migrates the active belt equatorward (butterfly diagram); the fully evolving 11-year cycle is not yet modelled.
+- **Grouped sunspot data in the UI**: the panel reports the activity regime, Rossby number and convective turnover time, the live spot count and spotted area, and an estimated sunspot number (`R = Ns + 10·Ng`).
 - **Two view modes**
   | Mode | Description |
   |------|-------------|
@@ -98,7 +99,7 @@ Then open the URL printed by Vite (usually `http://localhost:5173`).
 | **Star type selector** | Switch between star types |
 | **Time speed control** | Accelerate stellar aging (main-sequence stars) |
 | **Wind speed / mass-loss / rotation / tilt** | Shape the magnetic field and plasma outflow |
-| **Sunspot controls** | Toggle the simulation, pause/resume surface drift, set activity level and surface-time speed, reset |
+| **Sunspot controls** | Toggle the simulation, pause/resume surface drift, set activity (auto from rotation or manual), cycle phase and surface-time speed, reset |
 | **Field lines / particles / corona toggles** | Show or hide each layer |
 | **HDR bloom / lens flare toggles** | Toggle the camera-optics effects |
 | **Starfield / pulsar toggles** | Show or hide the background and compact-star beams |
@@ -131,8 +132,8 @@ Mass, radius and effective temperature are the defining observational inputs; de
 At startup the app checks for WebGPU support and initializes the WebGPU renderer; if it's unavailable, it falls back to WebGL2 automatically. Rendering goes through a TSL render pipeline:
 
 - **HDR pipeline**: the scene renders into a linear **float16** target; bloom and the lens flare are extracted from that HDR signal; the output node then applies **exposure → tone mapping → sRGB encode → dither**. AgX or Khronos PBR Neutral are offered because they preserve hue in very bright, saturated colours, where ACES drifts (and blackbody hue *is* the point).
-- **Photosphere (sphere)**: physics-driven convection detail — cell size, contrast, giant-cell blending and evolution speed come from the surface model (see below); giant cells geometrically displace the surface (**3D bumps/indentations**) with a gradient-perturbed normal; plus faculae, the linear limb-darkening law `I(μ) = 1 − u(1 − μ)`, limb **reddening**, and blackbody colour from the **Planckian locus**. Convective dark regions and the evolving magnetic-spot layer are separate.
-- **Sunspots**: a bounded, preallocated layer of circular caps on the photosphere. Each spot is a direction plus the cosines of its penumbra/umbra angular radii, so a fragment needs only a dot product and a couple of smoothsteps per spot; overlapping spots combine with `max` (never summed, so they don't double-darken). Their colour and brightness come from the blackbody at the spot temperature, and a small flux-compensation term keeps the disc's total flux consistent as spotted area grows.
+- **Photosphere (sphere)**: physics-driven convection detail — cell size, contrast, lane depth, granule variation, giant-cell blending and evolution speed come from the surface model (see below). Granulation is two octaves of cellular noise (irregular bright granules with narrow dark lanes) plus a coarse network, boiling slowly in time and faded by screen-space level of detail. Giant cells geometrically displace the surface (**3D bumps/indentations**) with a gradient-perturbed normal; plus faculae tied to active regions, the linear limb-darkening law `I(μ) = 1 − u(1 − μ)`, mild limb **reddening**, and blackbody colour from the **Planckian locus**. Convective dark regions and the evolving magnetic-spot layer are separate.
+- **Sunspots**: a bounded, preallocated layer of irregular caps on the photosphere. Each spot is a direction plus the cosines of its plage/penumbra/umbra angular radii, so a fragment needs only a dot product, a cheap trigonometric edge wobble and a few smoothsteps per spot. Up to `MAX_RENDERED_SUNSPOTS` (48) are evaluated per fragment; overlapping spots combine with `max` (never summed, so they don't double-darken) and spots replace the granulated surface rather than being multiplied over it. Their colour and brightness come from the blackbody at the spot temperature, faculae brighten the surrounding plage near the limb, and a small flux-compensation term keeps the disc's total flux consistent as spotted area grows.
 - **Photosphere (neutron star)**: the light is bent by gravity. Using the photon invariant `sin α = (b/R)√(1 − u)` and **Beloborodov's approximation** `1 − cos α = (1 − u)(1 − cos ψ)`, each screen pixel is mapped to the surface point actually seen — including the far side (`ψ > 90°`), so more than half the surface is visible. `u = r_s/R` is computed from the mass and radius.
 - **Corona / chromosphere**: a soft camera-facing billboard (diffuse corona with fractal streamers) plus a thin red **chromosphere rim** and **prominences**, gated to Filter mode since that is when they are really visible.
 - **Pulsar jet**: a long-lived particle outflow, not a solid cone. Packets launch into a narrow cone about the spin axis (nudged by the magnetic tilt) and travel ballistically for a long time so a developed, collimated jet forms. Rotation appears as phase-locked **helical flutes** — the jet is a twisted, rope-like structure that rotates with the star. Packets are instanced emissive blobs (streaked along their velocity) with per-packet relativistic **Doppler beaming** from the angle to the camera. (Packets represent emitting plasma blobs, not individual particles.)
@@ -154,7 +155,7 @@ All physical quantities are SI internally. A single solver (`physics/solver.ts`)
 - **Main-sequence lifetime**: `t ≈ 10 Gyr · (M / M☉)^-2.5` (approximation)
 - **Rotational flattening**: rotation parameter `q = Ω²R³/(GM) = 3Ω²/(4πGρ)`, flattening `f ≈ 1.25·q` (first-order, clamped). Low density and fast rotation ⇒ strong oblateness; `q ≥ 0.8` is flagged as mass-shedding.
 - **Surface convection**: pressure scale height `H_p ≈ k_B·T_eff/(μ·m_H·g)` with `g = GM/R²`, cell size `≈ 4·H_p`. This is what makes extended (low-density) stars show giant cells. Regimes: cool dwarfs → fine granules; cool giants → few large cells + broad cool regions; hot massive stars → low contrast; neutron stars → smooth (no ordinary convection). Approximate — real granulation also depends on opacity and envelope depth.
-- **Sunspots**: a solar-calibrated approximation, not an MHD simulation. Spots emerge in active latitude belts (initially 8–28°) at an activity-scaled rate, live 3–30 days (larger spots live longer), and follow a fast-emergence/slow-decay lifecycle. Rotation uses the solar differential law `Ω(λ) = A + B·sin²λ + C·sin⁴λ` (Snodgrass & Ulrich 1990, sidereal; `A = 14.713`, `B = −2.396`, `C = −1.787` °/day), with the wind store's period taken as the equatorial fiducial period. Spot colour and radiance come from the blackbody at `T_umbra ≈ 0.66·T_eff` and `T_penumbra ≈ 0.87·T_eff`, so contrast is strongest on Sun-like stars. Butterfly migration, the 11-year cycle and polarity reversals are not modelled yet.
+- **Starspot activity**: a solar-calibrated approximation, not an MHD simulation. The number and area of spots come from a **Rossby-number activity model** (`Ro = P_rot/τ_conv`, turnover `τ_conv ≈ 10.4 d` at solar mass, `activity ∝ Ro^−0.8`, saturating at the solar value), so a faster rotator is more spotted and the Sun at solar maximum carries several dozen individual spots (~0.2 % spotted area, estimated `R = Ns + 10·Ng ≈ 150`). Active regions are **bipolar groups** — one or two dominant spots plus a scatter of small pores — emerging in an active-latitude belt that migrates equatorward with the cycle phase (30° → 5°; evolved giants may carry higher-latitude spots at larger sizes). Region areas follow a geometric (top-heavy) distribution, spots follow a fast-emergence/slow-decay lifecycle and larger spots live longer (0.5–30 days). Rotation uses the solar differential law `Ω(λ) = A + B·sin²λ + C·sin⁴λ` (Snodgrass & Ulrich 1990, sidereal; `A = 14.713`, `B = −2.396`, `C = −1.787` °/day), with the wind-store period as the equatorial fiducial period. Spot colour and radiance come from the blackbody at `T_umbra ≈ 0.66·T_eff` and `T_penumbra ≈ 0.87·T_eff`, so contrast is strongest on Sun-like stars. Hot radiative-envelope stars and compact objects host no ordinary spots. Polarity reversals and the fully evolving 11-year cycle are not modelled yet.
 - **Neutron stars**: ~1.4 M☉ in a ~10–12 km radius, density on the order of 10¹⁷ kg/m³, magnetic fields from ~10⁸ G up to ~10¹⁵ G (magnetar territory). Compactness `u = r_s/R ≈ 0.3–0.4` drives the gravitational lensing. Luminosity follows from the blackbody relation, never from the main-sequence relation.
 
 The **constraint modes** decide which relations are enforced:
@@ -204,8 +205,8 @@ star-simulator/
     │   ├── pulsar.ts             # Rotating particle jet with Doppler beaming
     │   ├── starfield.ts          # Procedural starfield + Milky Way backdrop
     │   ├── shaders/
-    │   │   ├── surfaceDetail.ts     # Shared granulation + broad cool regions
-    │   │   ├── sunspots.ts          # Evolving umbra/penumbra spot layer
+    │   │   ├── surfaceDetail.ts     # Shared granulation (cells + lanes), broad cool regions
+    │   │   ├── sunspots.ts          # Irregular umbra/penumbra caps + faculae
     │   │   ├── starSurface.ts       # Sphere photosphere, limb law + reddening
     │   │   ├── lensedSurface.ts     # Neutron-star disc + light bending
     │   │   └── corona.ts            # Corona + chromosphere + prominences
@@ -216,7 +217,8 @@ star-simulator/
     │   ├── relations.ts          # Mass / radius / density / luminosity math
     │   ├── rotation.ts           # Rotational flattening / oblateness (q, density)
     │   ├── surface.ts            # Convection cell size from scale height (regimes)
-    │   ├── sunspots.ts           # Spot lifecycle, differential rotation, contrast
+    │   ├── activity.ts           # Rossby-number starspot activity / population model
+    │   ├── sunspots.ts           # Spot lifecycle, differential rotation, contrast, regions
     │   ├── evolution.ts          # Mass-dependent aging track
     │   ├── solver.ts             # Central input → consistent-stats solver
     │   ├── starTypes.ts          # Presets for each star type
@@ -225,7 +227,8 @@ star-simulator/
     │   ├── relations.test.ts     # Unit tests (limits, scalings)
     │   ├── rotation.test.ts      # Unit tests (oblateness, density coupling)
     │   ├── surface.test.ts       # Unit tests (regimes, cell size)
-    │   ├── sunspots.test.ts      # Unit tests (supported, lifecycle, rotation)
+    │   ├── activity.test.ts      # Unit tests (Rossby number, population, belts)
+    │   ├── sunspots.test.ts      # Unit tests (supported, lifecycle, rotation, regions)
     │   ├── starPresets.test.ts   # Unit tests (ranges, consistency)
     │   ├── evolution.test.ts
     │   └── solver.test.ts
@@ -255,6 +258,9 @@ star-simulator/
 - [x] Magnetar-style twisted magnetosphere (rotation + field strength)
 - [x] Physics-driven surface inhomogeneity (giant convection cells, cool regions, hot/compact regimes)
 - [x] Evolving sunspot simulation (emergence, differential-rotation drift, umbra/penumbra, decay)
+- [x] Realistic granulation (irregular bright granules, dark intergranular lanes, screen-space LOD fade)
+- [x] Rossby-number starspot activity model with multi-spot regions, automatic activity and faculae
+- [ ] Evolving 11-year activity cycle with butterfly migration and polarity reversals
 - [x] Real-star presets (Sun, Sirius, Vega, Betelgeuse, Crab Pulsar, magnetar, …)
 - [x] Procedural starfield / Milky Way backdrop
 - [ ] Red giant & white dwarf stages

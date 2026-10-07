@@ -10,7 +10,7 @@ import type { ConstraintMode } from '@/types/star'
 import type { ToneMappingKind } from '@/render/postprocessing'
 import { rotationShape } from '@/physics/rotation'
 import { surfaceModel } from '@/physics/surface'
-import { sunspotsSupported as isSunspotCapable } from '@/physics/sunspots'
+import { estimateSunspotNumber, expectedSpotCounts, spotActivityModel } from '@/physics/activity'
 import { getPreset, presetGroups, presetStats } from '@/physics/starPresets'
 import {
   ASTRONOMICAL_UNIT,
@@ -180,7 +180,27 @@ const timeScaleLog = computed({
 })
 
 // --- Sunspots ---------------------------------------------------------------
-const sunspotsAvailable = computed(() => isSunspotCapable(stats.value, star.typeId))
+const activityModel = computed(() =>
+  spotActivityModel(stats.value, star.typeId, windParams.value.rotationPeriod, sunspots.cyclePhase),
+)
+const sunspotsAvailable = computed(() => activityModel.value.supported)
+const effectiveActivity = computed(() =>
+  sunspots.autoActivity ? activityModel.value.relativeActivity : sunspots.activity,
+)
+
+const autoActivity = computed({
+  get: () => sunspots.autoActivity,
+  set: (value) => sunspots.setAutoActivity(value),
+})
+
+const cyclePhaseFraction = computed({
+  get: () => sunspots.cyclePhase,
+  set: (value) => sunspots.setCyclePhase(value),
+})
+
+const spotEstimate = computed(() => expectedSpotCounts(activityModel.value, effectiveActivity.value))
+const spotNumberEstimate = computed(() => estimateSunspotNumber(activityModel.value, effectiveActivity.value))
+const coverageDisplay = computed(() => `${(sunspots.coverage * 100).toFixed(2)}%`)
 
 const sunspotActivity = computed({
   get: () => sunspots.activity,
@@ -514,18 +534,36 @@ const isLensed = computed(() => star.type.surface === 'lensed')
           Simulate sunspots
         </label>
 
-        <div class="row">
-          <button type="button" :disabled="!sunspots.enabled" @click="sunspots.toggleRunning()">
-            {{ sunspots.running ? 'Pause drift' : 'Resume drift' }}
-          </button>
-        </div>
+        <label class="check">
+          <input
+            type="checkbox"
+            :checked="autoActivity"
+            :disabled="!sunspots.enabled"
+            @change="autoActivity = !autoActivity"
+          />
+          Auto activity (from rotation)
+        </label>
 
-        <div class="field" :class="{ disabled: !sunspots.enabled }">
+        <div class="field" :class="{ disabled: !sunspots.enabled || autoActivity }">
           <label for="spot-activity">Activity</label>
-          <output>{{ (sunspots.activity * 100).toFixed(0) }}%</output>
+          <output>{{ (effectiveActivity * 100).toFixed(0) }}%</output>
           <input
             id="spot-activity"
             v-model.number="sunspotActivity"
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            :disabled="!sunspots.enabled || autoActivity"
+          />
+        </div>
+
+        <div class="field" :class="{ disabled: !sunspots.enabled }">
+          <label for="spot-cycle">Cycle phase</label>
+          <output>{{ (sunspots.cyclePhase * 100).toFixed(0) }}%</output>
+          <input
+            id="spot-cycle"
+            v-model.number="cyclePhaseFraction"
             type="range"
             min="0"
             max="1"
@@ -548,13 +586,29 @@ const isLensed = computed(() => star.type.surface === 'lensed')
           />
         </div>
 
+        <div class="row">
+          <button type="button" :disabled="!sunspots.enabled" @click="sunspots.toggleRunning()">
+            {{ sunspots.running ? 'Pause drift' : 'Resume drift' }}
+          </button>
+        </div>
+
         <p class="derived">
-          Active spots: <strong>{{ sunspots.spotCount }}</strong> · surface time elapsed
-          <strong>{{ sunspotElapsedDisplay }}</strong>
+          Regime <strong>{{ activityModel.regime }}</strong> · Rossby number Ro
+          <strong>{{ activityModel.rossbyNumber.toFixed(2) }}</strong> · turnover
+          <strong>{{ activityModel.turnoverDays.toFixed(1) }} d</strong>
         </p>
         <p class="derived">
-          Spots emerge in active belts, drift with latitude-dependent rotation and decay. Umbra/penumbra temperature
-          follows the photosphere (a solar-calibrated approximation) — this is a separate clock from stellar aging.
+          Active spots: <strong>{{ sunspots.spotCount }}</strong> · coverage
+          <strong>{{ coverageDisplay }}</strong> · est. sunspot number R ≈
+          <strong>{{ Math.round(spotNumberEstimate) }}</strong> ({{
+            Math.round(spotEstimate.groups)
+          }}
+          groups / {{ Math.round(spotEstimate.spots) }} spots)
+        </p>
+        <p class="derived">
+          Surface time elapsed <strong>{{ sunspotElapsedDisplay }}</strong>. Spots emerge in the active-latitude belt,
+          drift with latitude-dependent rotation and decay. Umbra/penumbra temperature follows the photosphere — a
+          solar-calibrated approximation, separate from stellar aging.
         </p>
       </template>
 
