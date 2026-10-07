@@ -13,6 +13,7 @@ An interactive, browser-based 3D star simulator. Pick a star type, tweak its phy
     - Main-sequence star (Sun-like and other spectral classes)
     - Neutron star
     - *(planned)* Red giant, white dwarf, magnetar
+- **Real-star presets**: pick a well-known star and the simulator instantly sets its mass, radius, temperature, magnetic field and wind. Density and luminosity are derived consistently, so presets always land in a self-consistent Sandbox state.
 - **Live stat editing** via a slider panel with three **constraint modes**:
     | Mode | Editable | Derived |
     |------|----------|---------|
@@ -92,6 +93,7 @@ Then open the URL printed by Vite (usually `http://localhost:5173`).
 | **Mass / radius / temperature slider** | Adjust the primary inputs (availability depends on the constraint mode) |
 | **Luminosity / density slider** | Adjust directly in *Free* mode; derived and read-only otherwise |
 | **Magnetic field slider** | Surface field strength (10⁻³ G … 10¹⁵ G depending on type) |
+| **Real-star preset selector** | Load a known star's parameters instantly |
 | **Star type selector** | Switch between star types |
 | **Time speed control** | Accelerate stellar aging (main-sequence stars) |
 | **Wind speed / mass-loss / rotation / tilt** | Shape the magnetic field and plasma outflow |
@@ -102,6 +104,21 @@ Then open the URL printed by Vite (usually `http://localhost:5173`).
 | **Auto-exposure + compensation** | Eye adaptation, or manual exposure offset in stops |
 | **Fit star button** | Reframe the camera on the star |
 | **View mode toggle** | Switch between *Real* and *Filter* |
+
+---
+
+## Star Presets
+
+Selecting a preset sets the star's parameters instantly (and switches to Sandbox mode so the values stay self-consistent).
+
+| Category | Stars |
+|----------|-------|
+| Main sequence | Sun, Proxima Centauri, Barnard's Star, Alpha Centauri A, Sirius A, Altair, Vega, R136a1 |
+| Giants | Arcturus, Aldebaran |
+| Supergiants | Polaris, Rigel, Deneb, Antares, Betelgeuse, VY Canis Majoris |
+| Compact objects | Crab Pulsar, PSR J1748−2446ad, SGR 1806−20 (magnetar) |
+
+Mass, radius and effective temperature are the defining observational inputs; density and luminosity follow from `ρ = 3M/4πR³` and `L = 4πR²σT⁴`. Try **Altair** for the oblateness model, **Betelgeuse**/**VY Canis Majoris** for giant convection cells with 3D relief, and **SGR 1806−20** for the twisted magnetosphere and pulsar jet.
 
 ---
 
@@ -193,10 +210,12 @@ star-simulator/
     │   ├── evolution.ts          # Mass-dependent aging track
     │   ├── solver.ts             # Central input → consistent-stats solver
     │   ├── starTypes.ts          # Presets for each star type
+    │   ├── starPresets.ts        # Named real-star presets
     │   ├── color.test.ts         # Unit tests (colour, conversions)
     │   ├── relations.test.ts     # Unit tests (limits, scalings)
     │   ├── rotation.test.ts      # Unit tests (oblateness, density coupling)
     │   ├── surface.test.ts       # Unit tests (regimes, cell size)
+    │   ├── starPresets.test.ts   # Unit tests (ranges, consistency)
     │   ├── evolution.test.ts
     │   └── solver.test.ts
     └── types/
@@ -223,6 +242,7 @@ star-simulator/
 - [x] Rotation-driven oblateness (density-coupled) with sub-second compact-star rotation
 - [x] Magnetar-style twisted magnetosphere (rotation + field strength)
 - [x] Physics-driven surface inhomogeneity (giant convection cells, cool regions, hot/compact regimes)
+- [x] Real-star presets (Sun, Sirius, Vega, Betelgeuse, Crab Pulsar, magnetar, …)
 - [x] Procedural starfield / Milky Way backdrop
 - [ ] Red giant & white dwarf stages
 - [ ] Magnetar preset (extreme field + flares)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useStarStore } from '@/stores/star'
 import { useSimulationStore } from '@/stores/simulation'
@@ -9,6 +9,7 @@ import type { ConstraintMode } from '@/types/star'
 import type { ToneMappingKind } from '@/render/postprocessing'
 import { rotationShape } from '@/physics/rotation'
 import { surfaceModel } from '@/physics/surface'
+import { getPreset, presetGroups, presetStats } from '@/physics/starPresets'
 import {
   ASTRONOMICAL_UNIT,
   densityFromMassRadius,
@@ -26,6 +27,46 @@ const wind = useWindStore()
 const { stats, ranges, canAge, consistency, metresPerSceneUnit } = storeToRefs(star)
 const { running, timeScale } = storeToRefs(simulation)
 const { params: windParams } = storeToRefs(wind)
+
+const presetGroupList = presetGroups()
+const selectedPresetId = ref('')
+const currentPreset = computed(() => (selectedPresetId.value ? getPreset(selectedPresetId.value) : undefined))
+
+function selectPreset(id: string): void {
+  const preset = getPreset(id)
+  if (!preset) {
+    selectedPresetId.value = ''
+    return
+  }
+  star.applyPreset(preset)
+  simulation.reset()
+  selectedPresetId.value = preset.id
+}
+
+function onPresetChange(event: Event): void {
+  const target = event.target
+  if (target instanceof HTMLSelectElement) selectPreset(target.value)
+}
+
+// Drop back to "Custom" as soon as the values no longer match the preset.
+watch(
+  stats,
+  (value) => {
+    const preset = selectedPresetId.value ? getPreset(selectedPresetId.value) : undefined
+    if (!preset) return
+    const expected = presetStats(preset)
+    const same = (a: number, b: number): boolean => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a))
+    const matches =
+      same(expected.mass, value.mass) &&
+      same(expected.radius, value.radius) &&
+      same(expected.temperature, value.temperature) &&
+      same(expected.magneticField, value.magneticField) &&
+      same(expected.luminosity, value.luminosity) &&
+      same(expected.density, value.density)
+    if (!matches) selectedPresetId.value = ''
+  },
+  { deep: true },
+)
 
 function log10(value: number): number {
   return Math.log10(Math.max(value, Number.MIN_VALUE))
@@ -192,6 +233,19 @@ const isLensed = computed(() => star.type.surface === 'lensed')
       <h1>✦ Star Simulator</h1>
       <p>{{ star.type.description }}</p>
     </header>
+
+    <section>
+      <div class="section-head">
+        <h2>Real star preset</h2>
+      </div>
+      <select class="preset-select" :value="selectedPresetId" @change="onPresetChange">
+        <option value="">Custom</option>
+        <optgroup v-for="group in presetGroupList" :key="group.category" :label="group.label">
+          <option v-for="preset in group.presets" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
+        </optgroup>
+      </select>
+      <p v-if="currentPreset" class="derived">{{ currentPreset.note }}</p>
+    </section>
 
     <section>
       <div class="section-head">
@@ -601,6 +655,25 @@ h2 {
 .segmented button.active {
   background: #1d2b52;
   color: #ffffff;
+}
+
+.preset-select {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid #232b45;
+  background: #101627;
+  color: #dce4f2;
+  font-size: 13px;
+}
+
+.preset-select optgroup {
+  color: #7f8aa3;
+}
+
+.preset-select option {
+  color: #dce4f2;
+  background: #101627;
 }
 
 .field {

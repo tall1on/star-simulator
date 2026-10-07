@@ -3,7 +3,9 @@ import { defineStore } from 'pinia'
 import type { ConsistencyReport, ConstraintMode, StarInputs, StarStats, StarTypeId } from '@/types/star'
 import { getStarType, STAR_TYPES } from '@/physics/starTypes'
 import { checkConsistency, solveStar } from '@/physics/solver'
+import { presetStats, type StarPreset } from '@/physics/starPresets'
 import { blackbodyColor, SOLAR_LUMINOSITY, SOLAR_MASS, SOLAR_RADIUS } from '@/physics/relations'
+import { useWindStore } from '@/stores/wind'
 
 function copyStats(target: StarInputs, source: StarStats): void {
   target.mass = source.mass
@@ -55,6 +57,17 @@ export const useStarStore = defineStore('star', () => {
   function setType(id: StarTypeId): void {
     typeId.value = id
     applyDefaults()
+    useWindStore().setFromType(getStarType(id))
+  }
+
+  /** Apply a known real-star preset: exact values, self-consistent Sandbox state. */
+  function applyPreset(preset: StarPreset): void {
+    typeId.value = preset.typeId
+    mode.value = 'sandbox'
+    const next = presetStats(preset)
+    copyStats(inputs, next)
+    ageFraction.value = 0
+    useWindStore().setParams(preset.wind)
   }
 
   function syncInputsFromStats(): void {
@@ -126,6 +139,7 @@ export const useStarStore = defineStore('star', () => {
     color,
     colorHex,
     setType,
+    applyPreset,
     setMode,
     setMass,
     setRadius,

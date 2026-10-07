@@ -206,7 +206,6 @@ onMounted(async () => {
   observer.observe(container)
   disconnectResize = () => observer.disconnect()
 
-  wind.setFromType(star.type)
   applyKind()
   syncScene()
   applyStats()
@@ -248,7 +247,6 @@ watch(
   },
 )
 watch(typeId, () => {
-  wind.setFromType(star.type)
   applyKind()
   syncScene()
   applyStats()

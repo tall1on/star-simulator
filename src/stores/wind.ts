@@ -12,7 +12,10 @@ export const useWindStore = defineStore('wind', () => {
   const params = reactive<WindParameters>({ ...STAR_TYPES['main-sequence'].defaultWind })
 
   function setFromType(type: StarType): void {
-    const wind = type.defaultWind
+    setParams(type.defaultWind)
+  }
+
+  function setParams(wind: WindParameters): void {
     params.speed = wind.speed
     params.massLossRate = wind.massLossRate
     params.rotationPeriod = wind.rotationPeriod
@@ -35,5 +38,5 @@ export const useWindStore = defineStore('wind', () => {
     params.tilt = value
   }
 
-  return { params, setFromType, setSpeed, setMassLossRate, setRotationPeriod, setTilt }
+  return { params, setFromType, setParams, setSpeed, setMassLossRate, setRotationPeriod, setTilt }
 })
