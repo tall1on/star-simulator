@@ -3,12 +3,14 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useStarStore } from '@/stores/star'
 import { useSimulationStore } from '@/stores/simulation'
+import { useSunspotStore } from '@/stores/sunspots'
 import { useViewStore } from '@/stores/view'
 import { useWindStore } from '@/stores/wind'
 import type { ConstraintMode } from '@/types/star'
 import type { ToneMappingKind } from '@/render/postprocessing'
 import { rotationShape } from '@/physics/rotation'
 import { surfaceModel } from '@/physics/surface'
+import { sunspotsSupported as isSunspotCapable } from '@/physics/sunspots'
 import { getPreset, presetGroups, presetStats } from '@/physics/starPresets'
 import {
   ASTRONOMICAL_UNIT,
@@ -23,6 +25,7 @@ const star = useStarStore()
 const simulation = useSimulationStore()
 const view = useViewStore()
 const wind = useWindStore()
+const sunspots = useSunspotStore()
 
 const { stats, ranges, canAge, consistency, metresPerSceneUnit } = storeToRefs(star)
 const { running, timeScale } = storeToRefs(simulation)
@@ -174,6 +177,29 @@ const windTiltRange = computed(() => star.windRanges.tilt)
 const timeScaleLog = computed({
   get: () => log10(timeScale.value),
   set: (value) => simulation.setTimeScale(10 ** value),
+})
+
+// --- Sunspots ---------------------------------------------------------------
+const sunspotsAvailable = computed(() => isSunspotCapable(stats.value, star.typeId))
+
+const sunspotActivity = computed({
+  get: () => sunspots.activity,
+  set: (value) => sunspots.setActivity(value),
+})
+
+const sunspotSpeedLog = computed({
+  get: () => log10(sunspots.speedDaysPerSecond),
+  set: (value) => sunspots.setSpeed(10 ** value),
+})
+
+const sunspotSpeedDisplay = computed(() => {
+  const days = sunspots.speedDaysPerSecond
+  return days >= 1 ? `${days.toFixed(1)} d/s` : `${(days * 24).toFixed(1)} h/s`
+})
+
+const sunspotElapsedDisplay = computed(() => {
+  const days = sunspots.elapsedDays
+  return days >= 365 ? `${(days / 365).toFixed(1)} yr` : `${days.toFixed(1)} d`
 })
 
 // --- Display helpers --------------------------------------------------------
@@ -473,6 +499,67 @@ const isLensed = computed(() => star.type.surface === 'lensed')
       </p>
       <p v-if="rotationInfo.atBreakup" class="derived warn">
         ⚠ At/above the mass-shedding limit — a real star would break up and shed material.
+      </p>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Sunspots</h2>
+        <button type="button" class="mini" :disabled="!sunspotsAvailable" @click="sunspots.reset()">Reset</button>
+      </div>
+
+      <template v-if="sunspotsAvailable">
+        <label class="check">
+          <input type="checkbox" :checked="sunspots.enabled" @change="sunspots.setEnabled(!sunspots.enabled)" />
+          Simulate sunspots
+        </label>
+
+        <div class="row">
+          <button type="button" :disabled="!sunspots.enabled" @click="sunspots.toggleRunning()">
+            {{ sunspots.running ? 'Pause drift' : 'Resume drift' }}
+          </button>
+        </div>
+
+        <div class="field" :class="{ disabled: !sunspots.enabled }">
+          <label for="spot-activity">Activity</label>
+          <output>{{ (sunspots.activity * 100).toFixed(0) }}%</output>
+          <input
+            id="spot-activity"
+            v-model.number="sunspotActivity"
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            :disabled="!sunspots.enabled"
+          />
+        </div>
+
+        <div class="field" :class="{ disabled: !sunspots.enabled }">
+          <label for="spot-speed">Surface time</label>
+          <output>{{ sunspotSpeedDisplay }}</output>
+          <input
+            id="spot-speed"
+            v-model.number="sunspotSpeedLog"
+            type="range"
+            min="-1"
+            max="2"
+            step="0.01"
+            :disabled="!sunspots.enabled"
+          />
+        </div>
+
+        <p class="derived">
+          Active spots: <strong>{{ sunspots.spotCount }}</strong> · surface time elapsed
+          <strong>{{ sunspotElapsedDisplay }}</strong>
+        </p>
+        <p class="derived">
+          Spots emerge in active belts, drift with latitude-dependent rotation and decay. Umbra/penumbra temperature
+          follows the photosphere (a solar-calibrated approximation) — this is a separate clock from stellar aging.
+        </p>
+      </template>
+
+      <p v-else class="derived">
+        No solar-type spots: this photosphere is too hot (or too compact) for the granulation and spot model.
       </p>
     </section>
 

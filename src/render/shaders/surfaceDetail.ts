@@ -1,6 +1,5 @@
 import * as THREE from 'three/webgpu'
 import {
-  abs,
   asin,
   clamp,
   cos,
@@ -9,7 +8,6 @@ import {
   mx_fractal_noise_float,
   mx_worley_noise_float_3d,
   oneMinus,
-  saturate,
   sin,
   smoothstep,
   time,
@@ -51,7 +49,6 @@ export interface SurfaceDetailUniforms {
   contrast: { value: number }
   giantBlend: { value: number }
   darkRegion: { value: number }
-  spotStrength: { value: number }
   evolution: { value: number }
   rotation: { value: number }
 }
@@ -66,8 +63,8 @@ export interface SurfaceDetail {
   setModel(params: SurfaceModelParams): void
   setDifferentialRotation(rate: number): void
   /**
-   * Convection granulation, giant cells, broad cool regions and magnetic spots
-   * for a surface direction (unit vector in star space).
+   * Convection granulation, giant cells and broad cool regions for a surface
+   * direction (unit vector in star space).
    */
   evaluate(dir: THREE.Node<'vec3'>): SurfaceSample
   /**
@@ -83,14 +80,14 @@ export interface SurfaceDetail {
  * The convection cell size is set by `cellFrequency` (from the physical
  * pressure scale height), contrast and giant-cell blending by `giantBlend`, and
  * `evolution` slows the pattern for extended stars. Broad cool convection
- * regions are kept separate from magnetic spots.
+ * regions are produced here; evolving magnetic spots are a separate layer
+ * (see `sunspots.ts`).
  */
 export function createSurfaceDetail(initial: SurfaceModelParams): SurfaceDetail {
   const uCellFrequency = uniform(initial.cellFrequency)
   const uContrast = uniform(initial.contrast)
   const uGiantBlend = uniform(initial.giantBlend)
   const uDarkRegion = uniform(initial.darkRegion)
-  const uSpotStrength = uniform(initial.spotStrength)
   const uEvolution = uniform(initial.evolution)
   const uRotation = uniform(0.12)
 
@@ -127,23 +124,14 @@ export function createSurfaceDetail(initial: SurfaceModelParams): SurfaceDetail 
     const cells = mix(fineCells, giantCells, uGiantBlend)
     const granulation = mix(float(1), cells, uContrast)
 
-    // Broad cool convection regions.
+    // Broad cool convection regions (magnetic spots are a separate, evolving layer).
     const darkNoise = mx_fractal_noise_float(rotated.mul(f.mul(0.18)).add(vec3(5, 11, 3)), 3, 2.0, 0.5)
       .mul(0.5)
       .add(0.5)
     const darkRegion = smoothstep(0.62, 0.88, darkNoise).mul(uDarkRegion)
 
-    // Magnetic spots in active latitude bands.
-    const spotNoise = mx_fractal_noise_float(rotated.mul(f.mul(0.5)).add(vec3(13, 5, 9)), 3, 2.0, 0.5)
-      .mul(0.5)
-      .add(0.5)
-    const lat = asin(clamp(dir.y, -1, 1))
-    const activeBand = saturate(oneMinus(abs(abs(lat).sub(0.45)).mul(2.2)))
-    const spot = smoothstep(0.68, 0.86, spotNoise).mul(activeBand).mul(uSpotStrength)
-
-    const cool = clamp(darkRegion.mul(0.7).add(spot.mul(0.85)), 0, 1)
-    const brightness = granulation.mul(oneMinus(darkRegion.mul(0.35))).mul(oneMinus(spot.mul(0.55)))
-    const tint = mix(vec3(1, 1, 1), vec3(0.68, 0.42, 0.28), cool)
+    const brightness = granulation.mul(oneMinus(darkRegion.mul(0.35)))
+    const tint = mix(vec3(1, 1, 1), vec3(0.9, 0.78, 0.66), darkRegion)
 
     return {
       brightness: brightness as THREE.Node<'float'>,
@@ -157,7 +145,6 @@ export function createSurfaceDetail(initial: SurfaceModelParams): SurfaceDetail 
       contrast: uContrast,
       giantBlend: uGiantBlend,
       darkRegion: uDarkRegion,
-      spotStrength: uSpotStrength,
       evolution: uEvolution,
       rotation: uRotation,
     },
@@ -166,7 +153,6 @@ export function createSurfaceDetail(initial: SurfaceModelParams): SurfaceDetail 
       uContrast.value = params.contrast
       uGiantBlend.value = params.giantBlend
       uDarkRegion.value = params.darkRegion
-      uSpotStrength.value = params.spotStrength
       uEvolution.value = params.evolution
     },
     setDifferentialRotation(rate) {

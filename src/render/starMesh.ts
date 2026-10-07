@@ -6,6 +6,8 @@ import { createStarSurface } from './shaders/starSurface'
 import { createLensedSurface } from './shaders/lensedSurface'
 import { createCorona } from './shaders/corona'
 import { DEFAULT_SURFACE_MODEL, type SurfaceModelParams } from './shaders/surfaceDetail'
+import { radianceRatio, spotTemperatures } from '@/physics/sunspots'
+import type { SunspotRenderData } from '@/types/sunspots'
 
 export interface StarObject {
   group: THREE.Group
@@ -15,6 +17,8 @@ export interface StarObject {
   setOblateness(flattening: number): void
   /** Physics-driven convection/spot parameters from {@link surfaceModel}. */
   setSurfaceModel(params: SurfaceModelParams): void
+  /** Upload the evolving sunspots and the current spotted area fraction. */
+  setSunspots(spots: readonly SunspotRenderData[], coverage: number): void
   applyStats(stats: StarStats, mode: ViewMode): void
   setCoronaVisible(visible: boolean): void
   update(camera: THREE.Camera): void
@@ -110,16 +114,30 @@ export function createStar(): StarObject {
     lensed.setSurfaceModel(params)
   }
 
+  function setSunspots(spots: readonly SunspotRenderData[], coverage: number): void {
+    sphere.setSunspots(spots, coverage)
+    lensed.setSunspots(spots, coverage)
+  }
+
   function applyStats(stats: StarStats, mode: ViewMode): void {
     const color = blackbodyColor(stats.temperature)
     const intensity = surfaceIntensityFor(stats, mode)
     const lensedNeutronStar = kind === 'lensed'
+
+    // Spot colour and contrast follow the blackbody at the spot temperature.
+    const { umbra, penumbra } = spotTemperatures(stats.temperature)
+    const spotColors = { umbra: blackbodyColor(umbra), penumbra: blackbodyColor(penumbra) }
+    const spotRadiance = {
+      umbra: radianceRatio(umbra, stats.temperature),
+      penumbra: radianceRatio(penumbra, stats.temperature),
+    }
 
     sphere.setColor(color)
     sphere.setIntensity(intensity)
     sphere.setLimbDarkening(lensedNeutronStar ? 0.35 : 0.62)
     sphere.setDifferentialRotation(lensedNeutronStar ? 0.03 : 0.12)
     sphere.setSurfaceModel(surfaceModel)
+    sphere.setSunspotColors(spotColors, spotRadiance)
 
     compactness = clamp(schwarzschildRadius(stats.mass) / stats.radius, 0.001, 0.6)
     lensed.setCompactness(compactness)
@@ -128,6 +146,7 @@ export function createStar(): StarObject {
     lensed.setLimbDarkening(0.5)
     lensed.setDifferentialRotation(0.05)
     lensed.setSurfaceModel(surfaceModel)
+    lensed.setSunspotColors(spotColors, spotRadiance)
 
     corona.setColor(color)
     corona.setIntensity(coronaIntensityFor(stats, mode))
@@ -173,5 +192,5 @@ export function createStar(): StarObject {
 
   setKind('sphere')
 
-  return { group, setKind, setSceneRadius, setOblateness, setSurfaceModel, applyStats, setCoronaVisible, update, dispose }
+  return { group, setKind, setSceneRadius, setOblateness, setSurfaceModel, setSunspots, applyStats, setCoronaVisible, update, dispose }
 }

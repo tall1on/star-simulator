@@ -17,6 +17,12 @@ import {
   vec3,
 } from 'three/tsl'
 import { createSurfaceDetail, DEFAULT_SURFACE_MODEL, type SurfaceModelParams } from './surfaceDetail'
+import {
+  createSunspots,
+  type SunspotColors,
+  type SunspotRadiance,
+} from './sunspots'
+import type { SunspotRenderData } from '@/types/sunspots'
 
 export interface StarSurface {
   material: THREE.MeshBasicNodeMaterial
@@ -25,6 +31,10 @@ export interface StarSurface {
   setSurfaceModel(params: SurfaceModelParams): void
   setLimbDarkening(coefficient: number): void
   setDifferentialRotation(rate: number): void
+  /** Upload the evolving spots plus the current spotted area fraction. */
+  setSunspots(spots: readonly SunspotRenderData[], coverage: number): void
+  /** Set the penumbra/umbra blackbody colours and their radiance ratios. */
+  setSunspotColors(colors: SunspotColors, radiance: SunspotRadiance): void
 }
 
 /**
@@ -45,6 +55,7 @@ export function createStarSurface(): StarSurface {
   const uLimb = uniform(0.62)
   const uDisplacement = uniform(0)
   const detail = createSurfaceDetail(DEFAULT_SURFACE_MODEL)
+  const sunspots = createSunspots()
 
   const dir = normalize(positionLocal)
   const height = detail.heightField(dir)
@@ -67,6 +78,7 @@ export function createStarSurface(): StarSurface {
   )
 
   const sample = detail.evaluate(dir)
+  const spot = sunspots.evaluate(dir)
   const viewDir = normalize(cameraPosition.sub(positionWorld))
   const mu = saturate(dot(normalWorld, viewDir))
   const limb = oneMinus(uLimb.mul(oneMinus(mu)))
@@ -75,8 +87,15 @@ export function createStarSurface(): StarSurface {
   const limbRedden = mix(vec3(1, 1, 1), vec3(1.0, 0.5, 0.24), oneMinus(mu).mul(0.55))
   const faculae = saturate(oneMinus(mu).mul(1.4)).mul(sample.brightness).mul(0.12)
 
-  const brightness = limb.mul(sample.brightness).add(faculae)
-  const colorNode = vec3(uColor).mul(sample.tint).mul(limbRedden).mul(brightness).mul(uIntensity)
+  // Spots replace the quiet photosphere by their own (cooler) blackbody.
+  const quietColor = vec3(uColor).mul(sample.tint)
+  const spotColor = mix(sunspots.penumbraColor, sunspots.umbraColor, spot.umbraMix)
+  const spotRadiance = mix(sunspots.penumbraRadiance, sunspots.umbraRadiance, spot.umbraMix)
+  const surfaceColor = mix(quietColor, spotColor, spot.cover)
+  const spotBrightness = mix(float(1), spotRadiance, spot.cover)
+
+  const brightness = limb.mul(sample.brightness).mul(spotBrightness).add(faculae)
+  const colorNode = surfaceColor.mul(limbRedden).mul(brightness).mul(uIntensity).mul(sunspots.fluxScale)
 
   const material = new THREE.MeshBasicNodeMaterial()
   material.positionNode = displaced
@@ -100,6 +119,12 @@ export function createStarSurface(): StarSurface {
     },
     setDifferentialRotation(rate) {
       detail.setDifferentialRotation(rate)
+    },
+    setSunspots(spots, coverage) {
+      sunspots.setSpots(spots, coverage)
+    },
+    setSunspotColors(colors, radiance) {
+      sunspots.setColors(colors, radiance)
     },
   }
 }

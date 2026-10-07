@@ -25,6 +25,7 @@ An interactive, browser-based 3D star simulator. Pick a star type, tweak its phy
 - **Stellar-wind controls**: wind speed, mass-loss rate, rotation period and magnetic tilt — a faster wind straightens the field, faster rotation winds it up. Sub-second (millisecond) rotation periods are supported for compact stars.
 - **Rotation shapes the star**: centrifugal flattening is computed from real physics, `q = Ω²R³/(GM) = 3Ω²/(4πGρ)`, so a fast-spinning, low-density star visibly bulges into an oblate spheroid (and is flagged once it passes the mass-shedding limit).
 - **Physically driven surface inhomogeneity**: convection cell size follows the photospheric pressure scale height `H_p ≈ k_B·T/(μm_H·g)`, so cool giants get a few huge cells and broad cool regions while dwarfs keep fine granulation — and magnetic spots are kept separate from convective dark regions. Hot massive stars and compact objects are handled as their own regimes rather than being forced through the solar granulation law. Giant cells also produce **real 3D relief**: vertices are displaced by the convective height field (amplitude `≈1.5·H_p/R`) with a gradient-perturbed normal, so the photosphere has actual bumps and indentations visible on the limb.
+- **Evolving sunspot simulation**: individual active regions **emerge, grow, drift and decay** on their own surface clock (separate from stellar aging), with a dark **umbra** and warm **penumbra**. Spots follow the solar latitude-dependent (differential) rotation law — the equator races, the poles lag — and their colour and contrast come from the blackbody at the spot temperature (umbra ≈ 0.66·T_eff, penumbra ≈ 0.87·T_eff), not a hand-picked tint. Controls for activity level and surface-time speed; a solar-calibrated approximation (no 11-year cycle yet).
 - **Two view modes**
   | Mode | Description |
   |------|-------------|
@@ -97,6 +98,7 @@ Then open the URL printed by Vite (usually `http://localhost:5173`).
 | **Star type selector** | Switch between star types |
 | **Time speed control** | Accelerate stellar aging (main-sequence stars) |
 | **Wind speed / mass-loss / rotation / tilt** | Shape the magnetic field and plasma outflow |
+| **Sunspot controls** | Toggle the simulation, pause/resume surface drift, set activity level and surface-time speed, reset |
 | **Field lines / particles / corona toggles** | Show or hide each layer |
 | **HDR bloom / lens flare toggles** | Toggle the camera-optics effects |
 | **Starfield / pulsar toggles** | Show or hide the background and compact-star beams |
@@ -129,7 +131,8 @@ Mass, radius and effective temperature are the defining observational inputs; de
 At startup the app checks for WebGPU support and initializes the WebGPU renderer; if it's unavailable, it falls back to WebGL2 automatically. Rendering goes through a TSL render pipeline:
 
 - **HDR pipeline**: the scene renders into a linear **float16** target; bloom and the lens flare are extracted from that HDR signal; the output node then applies **exposure → tone mapping → sRGB encode → dither**. AgX or Khronos PBR Neutral are offered because they preserve hue in very bright, saturated colours, where ACES drifts (and blackbody hue *is* the point).
-- **Photosphere (sphere)**: physics-driven convection detail — cell size, contrast, giant-cell blending and evolution speed come from the surface model (see below); giant cells geometrically displace the surface (**3D bumps/indentations**) with a gradient-perturbed normal; plus faculae, the linear limb-darkening law `I(μ) = 1 − u(1 − μ)`, limb **reddening**, and blackbody colour from the **Planckian locus**. Convective dark regions and magnetic spots are separate layers.
+- **Photosphere (sphere)**: physics-driven convection detail — cell size, contrast, giant-cell blending and evolution speed come from the surface model (see below); giant cells geometrically displace the surface (**3D bumps/indentations**) with a gradient-perturbed normal; plus faculae, the linear limb-darkening law `I(μ) = 1 − u(1 − μ)`, limb **reddening**, and blackbody colour from the **Planckian locus**. Convective dark regions and the evolving magnetic-spot layer are separate.
+- **Sunspots**: a bounded, preallocated layer of circular caps on the photosphere. Each spot is a direction plus the cosines of its penumbra/umbra angular radii, so a fragment needs only a dot product and a couple of smoothsteps per spot; overlapping spots combine with `max` (never summed, so they don't double-darken). Their colour and brightness come from the blackbody at the spot temperature, and a small flux-compensation term keeps the disc's total flux consistent as spotted area grows.
 - **Photosphere (neutron star)**: the light is bent by gravity. Using the photon invariant `sin α = (b/R)√(1 − u)` and **Beloborodov's approximation** `1 − cos α = (1 − u)(1 − cos ψ)`, each screen pixel is mapped to the surface point actually seen — including the far side (`ψ > 90°`), so more than half the surface is visible. `u = r_s/R` is computed from the mass and radius.
 - **Corona / chromosphere**: a soft camera-facing billboard (diffuse corona with fractal streamers) plus a thin red **chromosphere rim** and **prominences**, gated to Filter mode since that is when they are really visible.
 - **Pulsar jet**: a long-lived particle outflow, not a solid cone. Packets launch into a narrow cone about the spin axis (nudged by the magnetic tilt) and travel ballistically for a long time so a developed, collimated jet forms. Rotation appears as phase-locked **helical flutes** — the jet is a twisted, rope-like structure that rotates with the star. Packets are instanced emissive blobs (streaked along their velocity) with per-packet relativistic **Doppler beaming** from the angle to the camera. (Packets represent emitting plasma blobs, not individual particles.)
@@ -151,6 +154,7 @@ All physical quantities are SI internally. A single solver (`physics/solver.ts`)
 - **Main-sequence lifetime**: `t ≈ 10 Gyr · (M / M☉)^-2.5` (approximation)
 - **Rotational flattening**: rotation parameter `q = Ω²R³/(GM) = 3Ω²/(4πGρ)`, flattening `f ≈ 1.25·q` (first-order, clamped). Low density and fast rotation ⇒ strong oblateness; `q ≥ 0.8` is flagged as mass-shedding.
 - **Surface convection**: pressure scale height `H_p ≈ k_B·T_eff/(μ·m_H·g)` with `g = GM/R²`, cell size `≈ 4·H_p`. This is what makes extended (low-density) stars show giant cells. Regimes: cool dwarfs → fine granules; cool giants → few large cells + broad cool regions; hot massive stars → low contrast; neutron stars → smooth (no ordinary convection). Approximate — real granulation also depends on opacity and envelope depth.
+- **Sunspots**: a solar-calibrated approximation, not an MHD simulation. Spots emerge in active latitude belts (initially 8–28°) at an activity-scaled rate, live 3–30 days (larger spots live longer), and follow a fast-emergence/slow-decay lifecycle. Rotation uses the solar differential law `Ω(λ) = A + B·sin²λ + C·sin⁴λ` (Snodgrass & Ulrich 1990, sidereal; `A = 14.713`, `B = −2.396`, `C = −1.787` °/day), with the wind store's period taken as the equatorial fiducial period. Spot colour and radiance come from the blackbody at `T_umbra ≈ 0.66·T_eff` and `T_penumbra ≈ 0.87·T_eff`, so contrast is strongest on Sun-like stars. Butterfly migration, the 11-year cycle and polarity reversals are not modelled yet.
 - **Neutron stars**: ~1.4 M☉ in a ~10–12 km radius, density on the order of 10¹⁷ kg/m³, magnetic fields from ~10⁸ G up to ~10¹⁵ G (magnetar territory). Compactness `u = r_s/R ≈ 0.3–0.4` drives the gravitational lensing. Luminosity follows from the blackbody relation, never from the main-sequence relation.
 
 The **constraint modes** decide which relations are enforced:
@@ -186,8 +190,12 @@ star-simulator/
     ├── stores/
     │   ├── star.ts               # Inputs, constraint mode, solver-driven stats
     │   ├── simulation.ts         # Age, time scale, running state
+    │   ├── sunspots.ts           # Spot controls + throttled summaries
     │   ├── view.ts               # View mode, zoom, layer/effect toggles
     │   └── wind.ts               # Wind speed, mass loss, rotation, tilt
+    ├── simulation/
+    │   ├── sunspotSimulation.ts  # Evolving spot clock (emergence/drift/decay)
+    │   └── sunspotSimulation.test.ts
     ├── render/
     │   ├── createRenderer.ts     # WebGPU detection + WebGL2 fallback
     │   ├── starMesh.ts           # Photosphere (sphere + lensed disc) + corona
@@ -196,7 +204,8 @@ star-simulator/
     │   ├── pulsar.ts             # Rotating particle jet with Doppler beaming
     │   ├── starfield.ts          # Procedural starfield + Milky Way backdrop
     │   ├── shaders/
-    │   │   ├── surfaceDetail.ts     # Shared granulation + spots
+    │   │   ├── surfaceDetail.ts     # Shared granulation + broad cool regions
+    │   │   ├── sunspots.ts          # Evolving umbra/penumbra spot layer
     │   │   ├── starSurface.ts       # Sphere photosphere, limb law + reddening
     │   │   ├── lensedSurface.ts     # Neutron-star disc + light bending
     │   │   └── corona.ts            # Corona + chromosphere + prominences
@@ -207,6 +216,7 @@ star-simulator/
     │   ├── relations.ts          # Mass / radius / density / luminosity math
     │   ├── rotation.ts           # Rotational flattening / oblateness (q, density)
     │   ├── surface.ts            # Convection cell size from scale height (regimes)
+    │   ├── sunspots.ts           # Spot lifecycle, differential rotation, contrast
     │   ├── evolution.ts          # Mass-dependent aging track
     │   ├── solver.ts             # Central input → consistent-stats solver
     │   ├── starTypes.ts          # Presets for each star type
@@ -215,11 +225,13 @@ star-simulator/
     │   ├── relations.test.ts     # Unit tests (limits, scalings)
     │   ├── rotation.test.ts      # Unit tests (oblateness, density coupling)
     │   ├── surface.test.ts       # Unit tests (regimes, cell size)
+    │   ├── sunspots.test.ts      # Unit tests (supported, lifecycle, rotation)
     │   ├── starPresets.test.ts   # Unit tests (ranges, consistency)
     │   ├── evolution.test.ts
     │   └── solver.test.ts
     └── types/
-        └── star.ts
+        ├── star.ts
+        └── sunspots.ts
 ```
 
 ---
@@ -242,6 +254,7 @@ star-simulator/
 - [x] Rotation-driven oblateness (density-coupled) with sub-second compact-star rotation
 - [x] Magnetar-style twisted magnetosphere (rotation + field strength)
 - [x] Physics-driven surface inhomogeneity (giant convection cells, cool regions, hot/compact regimes)
+- [x] Evolving sunspot simulation (emergence, differential-rotation drift, umbra/penumbra, decay)
 - [x] Real-star presets (Sun, Sirius, Vega, Betelgeuse, Crab Pulsar, magnetar, …)
 - [x] Procedural starfield / Milky Way backdrop
 - [ ] Red giant & white dwarf stages

@@ -13,10 +13,14 @@ import { OrbitCameraController } from '@/render/camera'
 import { clamp, densityFromMassRadius } from '@/physics/relations'
 import { rotationShape } from '@/physics/rotation'
 import { surfaceModel } from '@/physics/surface'
+import { sunspotsSupported } from '@/physics/sunspots'
+import { SunspotSimulation } from '@/simulation/sunspotSimulation'
 import { useStarStore } from '@/stores/star'
 import { useSimulationStore } from '@/stores/simulation'
+import { useSunspotStore } from '@/stores/sunspots'
 import { useViewStore } from '@/stores/view'
 import { useWindStore } from '@/stores/wind'
+import type { SunspotRenderData } from '@/types/sunspots'
 
 const containerRef = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -25,6 +29,7 @@ const star = useStarStore()
 const simulation = useSimulationStore()
 const view = useViewStore()
 const wind = useWindStore()
+const sunspots = useSunspotStore()
 
 const { stats, metresPerSceneUnit, typeId, canAge } = storeToRefs(star)
 const {
@@ -54,11 +59,17 @@ let disconnectResize: (() => void) | null = null
 
 const autoExposure = new AutoExposure(0.7)
 
+const sunspotSimulation = new SunspotSimulation()
+const EMPTY_SUNSPOTS: readonly SunspotRenderData[] = []
+
 let rafId = 0
 let lastTime = 0
 let elapsed = 0
 let fpsAccumulator = 0
 let fpsFrames = 0
+let sunspotReportAccumulator = 0
+let sunspotsCleared = false
+let contextMenuHandler: ((event: Event) => void) | null = null
 
 function currentSceneRadius(): number {
   return stats.value.radius / metresPerSceneUnit.value
@@ -112,6 +123,38 @@ function syncSurface(): void {
   starObject?.setSurfaceModel(surfaceModel(stats.value, typeId.value))
 }
 
+function syncSunspotConfig(): void {
+  sunspotSimulation.configure({
+    enabled: sunspots.enabled,
+    running: sunspots.running,
+    activity: sunspots.activity,
+    speedDaysPerSecond: sunspots.speedDaysPerSecond,
+    rotationPeriodDays: windParams.value.rotationPeriod,
+    radius: stats.value.radius,
+    temperature: stats.value.temperature,
+    supported: sunspotsSupported(stats.value, typeId.value),
+  })
+}
+
+function updateSunspots(delta: number): void {
+  sunspotSimulation.step(delta)
+
+  if (sunspots.enabled) {
+    sunspotsCleared = false
+    const renderData = sunspotSimulation.render()
+    starObject?.setSunspots(renderData, sunspotSimulation.surfaceCoverage)
+  } else if (!sunspotsCleared) {
+    sunspotsCleared = true
+    starObject?.setSunspots(EMPTY_SUNSPOTS, 0)
+  }
+
+  sunspotReportAccumulator += delta
+  if (sunspotReportAccumulator >= 0.25) {
+    sunspotReportAccumulator = 0
+    sunspots.report(sunspotSimulation.spotCount, sunspotSimulation.elapsedDays)
+  }
+}
+
 function updateExposure(delta: number): void {
   if (!post) return
   if (view.autoExposure) {
@@ -143,6 +186,8 @@ function frame(time: number): void {
   if (starfield && controls) starfield.update(controls.camera)
   field?.update(elapsed, delta)
   if (controls) pulsar?.update(delta, controls.camera)
+
+  updateSunspots(delta)
 
   updateExposure(delta)
 
@@ -184,7 +229,8 @@ onMounted(async () => {
     autoRotate: true,
     onChange: (distance) => view.setZoom(distance),
   })
-  canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+  contextMenuHandler = (event: Event) => event.preventDefault()
+  canvas.addEventListener('contextmenu', contextMenuHandler)
 
   post = createPostprocessing(handle.renderer, scene, controls.camera)
   post.setBloomEnabled(bloomEnabled.value)
@@ -212,6 +258,8 @@ onMounted(async () => {
   syncSurface()
   rebuildField()
   syncPulsar()
+  syncSunspotConfig()
+  starObject.setSunspots(EMPTY_SUNSPOTS, 0)
   controls.fitStar(currentSceneRadius())
 
   rafId = requestAnimationFrame(frame)
@@ -246,6 +294,27 @@ watch(
     syncSurface()
   },
 )
+watch(
+  () => [
+    sunspots.enabled,
+    sunspots.running,
+    sunspots.activity,
+    sunspots.speedDaysPerSecond,
+    windParams.value.rotationPeriod,
+    stats.value.radius,
+    stats.value.temperature,
+    typeId.value,
+  ],
+  () => syncSunspotConfig(),
+)
+watch(
+  () => sunspots.resetRequestId,
+  () => {
+    sunspotSimulation.reset()
+    starObject?.setSunspots(EMPTY_SUNSPOTS, 0)
+    sunspots.report(0, 0)
+  },
+)
 watch(typeId, () => {
   applyKind()
   syncScene()
@@ -259,6 +328,7 @@ watch(typeId, () => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(rafId)
   disconnectResize?.()
+  if (contextMenuHandler) canvasRef.value?.removeEventListener('contextmenu', contextMenuHandler)
   controls?.dispose()
   post?.dispose()
   starfield?.dispose()

@@ -4,6 +4,7 @@ import {
   float,
   length,
   max,
+  mix,
   oneMinus,
   smoothstep,
   sqrt,
@@ -12,6 +13,8 @@ import {
   vec3,
 } from 'three/tsl'
 import { createSurfaceDetail, DEFAULT_SURFACE_MODEL, type SurfaceModelParams } from './surfaceDetail'
+import { createSunspots, type SunspotColors, type SunspotRadiance } from './sunspots'
+import type { SunspotRenderData } from '@/types/sunspots'
 
 export interface LensedSurface {
   material: THREE.MeshBasicNodeMaterial
@@ -22,6 +25,8 @@ export interface LensedSurface {
   setDifferentialRotation(rate: number): void
   /** Schwarzschild compactness u = r_s / R (0 … ~0.5). */
   setCompactness(u: number): void
+  setSunspots(spots: readonly SunspotRenderData[], coverage: number): void
+  setSunspotColors(colors: SunspotColors, radiance: SunspotRadiance): void
 }
 
 /**
@@ -44,6 +49,7 @@ export function createLensedSurface(): LensedSurface {
   const uLimb = uniform(0.5)
   const uCompactness = uniform(0.25)
   const detail = createSurfaceDetail(DEFAULT_SURFACE_MODEL)
+  const sunspots = createSunspots()
 
   const q = uv().sub(0.5).mul(2.0)
   const qLen = length(q)
@@ -62,15 +68,22 @@ export function createLensedSurface(): LensedSurface {
   const normal = vec3(q.x.div(safeLen).mul(sinPsi), q.y.div(safeLen).mul(sinPsi), cosPsi)
 
   const sample = detail.evaluate(normal)
+  const spot = sunspots.evaluate(normal)
 
   // Linear limb-darkening law, using the *emission* angle α.
   const limb = oneMinus(uLimb.mul(oneMinus(cosAlpha)))
   // Gravitational redshift dims the whole surface by (1 − u)².
   const redshift = oneMinusU.mul(oneMinusU)
 
+  const quietColor = vec3(uColor).mul(sample.tint)
+  const spotColor = mix(sunspots.penumbraColor, sunspots.umbraColor, spot.umbraMix)
+  const spotRadiance = mix(sunspots.penumbraRadiance, sunspots.umbraRadiance, spot.umbraMix)
+  const surfaceColor = mix(quietColor, spotColor, spot.cover)
+  const spotBrightness = mix(float(1), spotRadiance, spot.cover)
+
   const edgeFade = smoothstep(bMax.mul(1.0), bMax.mul(0.97), bOverR)
-  const brightness = limb.mul(sample.brightness).mul(redshift).mul(edgeFade)
-  const colorNode = vec3(uColor).mul(sample.tint).mul(brightness).mul(uIntensity)
+  const brightness = limb.mul(sample.brightness).mul(spotBrightness).mul(redshift).mul(edgeFade)
+  const colorNode = surfaceColor.mul(brightness).mul(uIntensity).mul(sunspots.fluxScale)
 
   const material = new THREE.MeshBasicNodeMaterial()
   material.colorNode = colorNode
@@ -94,6 +107,12 @@ export function createLensedSurface(): LensedSurface {
     },
     setCompactness(u) {
       uCompactness.value = Math.min(0.6, Math.max(0.001, u))
+    },
+    setSunspots(spots, coverage) {
+      sunspots.setSpots(spots, coverage)
+    },
+    setSunspotColors(colors, radiance) {
+      sunspots.setColors(colors, radiance)
     },
   }
 }
