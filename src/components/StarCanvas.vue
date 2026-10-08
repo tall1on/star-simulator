@@ -20,6 +20,8 @@ import { useSimulationStore } from '@/stores/simulation'
 import { useSunspotStore } from '@/stores/sunspots'
 import { useViewStore } from '@/stores/view'
 import { useWindStore } from '@/stores/wind'
+import { useMagnetosphereStore } from '@/stores/magnetosphere'
+import { magnetosphereRegime } from '@/physics/magnetosphere'
 import type { SunspotRenderData } from '@/types/sunspots'
 
 const containerRef = ref<HTMLDivElement | null>(null)
@@ -30,6 +32,7 @@ const simulation = useSimulationStore()
 const view = useViewStore()
 const wind = useWindStore()
 const sunspots = useSunspotStore()
+const magnetosphere = useMagnetosphereStore()
 
 const { stats, metresPerSceneUnit, typeId, canAge } = storeToRefs(star)
 const {
@@ -64,10 +67,10 @@ const EMPTY_SUNSPOTS: readonly SunspotRenderData[] = []
 
 let rafId = 0
 let lastTime = 0
-let elapsed = 0
 let fpsAccumulator = 0
 let fpsFrames = 0
 let sunspotReportAccumulator = 0
+let fieldReportAccumulator = 0
 let sunspotsCleared = false
 let contextMenuHandler: ((event: Event) => void) | null = null
 
@@ -89,13 +92,22 @@ function syncScene(): void {
   view.setSceneRadius(radius)
 }
 
-function rebuildField(): void {
+function syncField(): void {
   if (!field) return
-  field.rebuild({
+  field.configure({
+    enabled: magnetosphere.enabled,
+    running: magnetosphere.running,
+    timeScaleDaysPerSecond: magnetosphere.timeScaleDaysPerSecond,
     fieldStrength: stats.value.magneticField,
-    tilt: windParams.value.tilt,
     windSpeed: windParams.value.speed,
+    massLossRate: windParams.value.massLossRate,
     rotationPeriod: windParams.value.rotationPeriod,
+    tilt: windParams.value.tilt,
+    radius: stats.value.radius,
+    temperature: stats.value.temperature,
+    typeId: typeId.value,
+    activity: magnetosphere.activity,
+    regime: magnetosphereRegime(typeId.value, stats.value.temperature),
   })
 }
 
@@ -200,7 +212,6 @@ function frame(time: number): void {
 
   const delta = lastTime ? Math.min((time - lastTime) / 1000, 0.1) : 0
   lastTime = time
-  elapsed += delta
 
   if (simulation.running && canAge.value) {
     simulation.advance(delta)
@@ -210,10 +221,16 @@ function frame(time: number): void {
   controls?.update(delta)
   if (starObject && controls) starObject.update(controls.camera)
   if (starfield && controls) starfield.update(controls.camera)
-  field?.update(elapsed, delta)
+  field?.update(delta)
   if (controls) pulsar?.update(delta, controls.camera)
 
   updateSunspots(delta)
+
+  fieldReportAccumulator += delta
+  if (fieldReportAccumulator >= 0.25) {
+    fieldReportAccumulator = 0
+    if (field) magnetosphere.report(field.diagnostics())
+  }
 
   updateExposure(delta)
 
@@ -282,7 +299,7 @@ onMounted(async () => {
   syncScene()
   applyStats()
   syncSurface()
-  rebuildField()
+  syncField()
   syncPulsar()
   syncSunspotConfig()
   starObject.setSunspots(EMPTY_SUNSPOTS, 0)
@@ -297,8 +314,12 @@ watch(stats, () => {
   syncPulsar()
 }, { deep: true })
 watch(
+  () => [stats.value.radius, stats.value.temperature],
+  () => syncField(),
+)
+watch(
   () => stats.value.magneticField,
-  () => rebuildField(),
+  () => syncField(),
 )
 watch(currentSceneRadius, () => syncScene())
 watch(mode, () => applyStats())
@@ -315,7 +336,7 @@ watch(() => view.fitRequestId, () => controls?.fitStar(currentSceneRadius()))
 watch(
   () => [windParams.value.tilt, windParams.value.speed, windParams.value.rotationPeriod],
   () => {
-    rebuildField()
+    syncField()
     syncPulsar()
     syncSurface()
   },
@@ -351,10 +372,23 @@ watch(typeId, () => {
   syncScene()
   applyStats()
   syncSurface()
-  rebuildField()
+  syncField()
   syncPulsar()
   controls?.fitStar(currentSceneRadius())
 })
+watch(
+  () => [
+    magnetosphere.enabled,
+    magnetosphere.running,
+    magnetosphere.timeScaleDaysPerSecond,
+    magnetosphere.activity,
+  ],
+  () => syncField(),
+)
+watch(
+  () => magnetosphere.resetRequestId,
+  () => field?.reset(),
+)
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(rafId)

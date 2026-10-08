@@ -7,6 +7,7 @@ import { useSimulationStore } from '@/stores/simulation'
 import { useSunspotStore } from '@/stores/sunspots'
 import { useViewStore } from '@/stores/view'
 import { useWindStore } from '@/stores/wind'
+import { useMagnetosphereStore } from '@/stores/magnetosphere'
 import type { ConstraintMode } from '@/types/star'
 import type { ToneMappingKind } from '@/render/postprocessing'
 import { rotationShape } from '@/physics/rotation'
@@ -27,6 +28,7 @@ const simulation = useSimulationStore()
 const view = useViewStore()
 const wind = useWindStore()
 const sunspots = useSunspotStore()
+const magnetosphere = useMagnetosphereStore()
 
 const { stats, ranges, canAge, consistency, metresPerSceneUnit } = storeToRefs(star)
 const { running, timeScale } = storeToRefs(simulation)
@@ -220,6 +222,44 @@ const sunspotSpeedDisplay = computed(() => {
 
 const sunspotElapsedDisplay = computed(() => {
   const days = sunspots.elapsedDays
+  return days >= 365 ? `${(days / 365).toFixed(1)} yr` : `${days.toFixed(1)} d`
+})
+
+// --- Magnetic dynamics ------------------------------------------------------
+const fieldEnabled = computed({
+  get: () => magnetosphere.enabled,
+  set: (value) => magnetosphere.setEnabled(value),
+})
+
+const fieldActivity = computed({
+  get: () => magnetosphere.activity,
+  set: (value) => magnetosphere.setActivity(value),
+})
+
+const fieldTimeScaleLog = computed({
+  get: () => log10(magnetosphere.timeScaleDaysPerSecond),
+  set: (value) => magnetosphere.setTimeScale(10 ** value),
+})
+
+const fieldTimeScaleDisplay = computed(() => {
+  const days = magnetosphere.timeScaleDaysPerSecond
+  return days >= 1 ? `${days.toFixed(1)} d/s` : `${(days * 24).toFixed(1)} h/s`
+})
+
+const maxTwistDegrees = computed(() => (magnetosphere.maxTwist * 180) / Math.PI)
+
+const maxOpenWindingDegrees = computed(() => (magnetosphere.maxOpenWinding * 180) / Math.PI)
+
+const fieldCrossingDisplay = computed(() => {
+  const seconds = magnetosphere.alfvenCrossingSeconds
+  if (!(seconds > 0)) return '—'
+  if (seconds < 60) return `${seconds.toFixed(1)} s`
+  if (seconds < 86_400) return `${(seconds / 3600).toFixed(1)} h`
+  return `${(seconds / 86_400).toFixed(1)} d`
+})
+
+const fieldElapsedDisplay = computed(() => {
+  const days = magnetosphere.elapsedDays
   return days >= 365 ? `${(days / 365).toFixed(1)} yr` : `${days.toFixed(1)} d`
 })
 
@@ -520,6 +560,76 @@ const isLensed = computed(() => star.type.surface === 'lensed')
       </p>
       <p v-if="rotationInfo.atBreakup" class="derived warn">
         ⚠ At/above the mass-shedding limit — a real star would break up and shed material.
+      </p>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Magnetic dynamics</h2>
+        <button type="button" class="mini" @click="magnetosphere.requestReset()">Reset</button>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" :checked="fieldEnabled" @change="fieldEnabled = !fieldEnabled" />
+        Simulate field dynamics
+      </label>
+
+      <div class="row">
+        <button type="button" :disabled="!fieldEnabled" @click="magnetosphere.toggleRunning()">
+          {{ magnetosphere.running ? 'Pause field' : 'Resume field' }}
+        </button>
+      </div>
+
+      <div class="field" :class="{ disabled: !fieldEnabled }">
+        <label for="field-speed">Magnetic time</label>
+        <output>{{ fieldTimeScaleDisplay }}</output>
+        <input
+          id="field-speed"
+          v-model.number="fieldTimeScaleLog"
+          type="range"
+          min="-1"
+          max="2"
+          step="0.01"
+          :disabled="!fieldEnabled"
+        />
+      </div>
+
+      <div class="field" :class="{ disabled: !fieldEnabled }">
+        <label for="field-activity">Activity</label>
+        <output>{{ (fieldActivity * 100).toFixed(0) }}%</output>
+        <input
+          id="field-activity"
+          v-model.number="fieldActivity"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          :disabled="!fieldEnabled"
+        />
+      </div>
+
+      <p class="derived">
+        Regime <strong>{{ magnetosphere.regime }}</strong> · max loop twist
+        <strong>{{ maxTwistDegrees.toFixed(0) }}°</strong> · open winding
+        <strong>{{ maxOpenWindingDegrees.toFixed(0) }}°</strong> · Alfvén crossing
+        <strong>{{ fieldCrossingDisplay }}</strong>
+      </p>
+      <p class="derived">
+        {{ magnetosphere.lineCount }} lines ({{ magnetosphere.openLineCount }} open)<template
+          v-if="magnetosphere.differentialRotation"
+        >
+          · footpoints shear with differential rotation</template
+        ><template v-else>
+          · localised shear events in flight: <strong>{{ magnetosphere.shearEvents }}</strong></template
+        >
+      </p>
+      <p v-if="magnetosphere.exceedsLightCylinder" class="derived warn">
+        ⚠ Open field extends beyond the light cylinder; the closed-dipole picture is not valid there.
+      </p>
+      <p class="derived">
+        Field time elapsed <strong>{{ fieldElapsedDisplay }}</strong>. Closed loops shear only when their two footpoints
+        rotate at different rates, so a symmetric dipole stays put; open lines wind into a Parker spiral with the wind
+        travel time. Independent of stellar aging.
       </p>
     </section>
 
