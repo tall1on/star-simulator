@@ -19,6 +19,7 @@ function config(overrides: Partial<MagnetosphereConfig> = {}): MagnetosphereConf
     typeId: 'main-sequence',
     activity: 0.6,
     regime: 'convective',
+    eventFocus: false,
     ...overrides,
   }
 }
@@ -42,18 +43,22 @@ function seeded(next: MagnetosphereConfig): MagnetosphereSimulation {
   return simulation
 }
 
-function lineIndicesByKind(simulation: MagnetosphereSimulation, kind: FieldLineKind): number[] {
-  const indices: number[] = []
-  for (let i = 0; i < simulation.lineCount; i++) {
-    if (simulation.lineKind(i) === kind) indices.push(i)
+function maxTwistOfGroup(simulation: MagnetosphereSimulation, group: FieldLineKind): number {
+  let max = 0
+  for (let i = 0; i < simulation.slotCount; i++) {
+    if (simulation.slotActive(i) && simulation.slotGroup(i) === group) {
+      max = Math.max(max, simulation.lineMaxTwist(i))
+    }
   }
-  return indices
+  return max
 }
 
-function maxTwistOfKind(simulation: MagnetosphereSimulation, kind: FieldLineKind): number {
+function maxBundleApex(simulation: MagnetosphereSimulation): number {
   let max = 0
-  for (const index of lineIndicesByKind(simulation, kind)) {
-    max = Math.max(max, simulation.lineMaxTwist(index))
+  for (let i = 0; i < simulation.slotCount; i++) {
+    if (simulation.slotActive(i) && simulation.slotGroup(i) === 'bundle') {
+      max = Math.max(max, simulation.slotApex(i))
+    }
   }
   return max
 }
@@ -67,8 +72,9 @@ function maxOpenWinding(simulation: MagnetosphereSimulation): number {
 }
 
 function allPositionsFinite(simulation: MagnetosphereSimulation): boolean {
-  for (let i = 0; i < simulation.lineCount; i++) {
-    const positions = simulation.linePositions(i)
+  for (let i = 0; i < simulation.slotCount; i++) {
+    if (!simulation.slotActive(i)) continue
+    const positions = simulation.slotPositions(i)
     for (let j = 0; j < positions.length; j++) {
       if (!Number.isFinite(positions[j] ?? Number.NaN)) return false
     }
@@ -94,24 +100,121 @@ describe('MagnetosphereSimulation gating', () => {
   })
 })
 
-describe('MagnetosphereSimulation closed-loop dynamics', () => {
-  it('leaves symmetric dipole loops untwisted', () => {
+describe('MagnetosphereSimulation background dipole', () => {
+  it('leaves symmetric closed loops untwisted', () => {
     const simulation = seeded(config())
-    simulation.advance(3_000_000)
-    expect(maxTwistOfKind(simulation, 'closed')).toBeLessThan(1e-6)
+    simulation.advance(5_000_000)
+    expect(maxTwistOfGroup(simulation, 'closed')).toBeLessThan(1e-6)
+  })
+})
+
+describe('MagnetosphereSimulation evolving regions and bundles', () => {
+  it('emerges bipolar regions with bundles over time', () => {
+    const simulation = seeded(config({ activity: 1 }))
+    simulation.advance(30 * SECONDS_PER_DAY)
+    expect(simulation.regionCount).toBeGreaterThan(0)
+    expect(simulation.bundleCount).toBeGreaterThan(0)
+    expect(maxTwistOfGroup(simulation, 'bundle')).toBeGreaterThan(0)
   })
 
-  it('shears asymmetric active-region loops', () => {
-    const simulation = seeded(config())
-    simulation.advance(3_000_000)
-    expect(maxTwistOfKind(simulation, 'active')).toBeGreaterThan(1e-4)
+  it('produces no regions at zero activity', () => {
+    const simulation = seeded(config({ activity: 0 }))
+    simulation.advance(60 * SECONDS_PER_DAY)
+    expect(simulation.regionCount).toBe(0)
+    expect(simulation.bundleCount).toBe(0)
   })
 
-  it('does not wind a symmetric dipole even without differential rotation', () => {
-    const simulation = seeded(config({ regime: 'radiative', temperature: 20_000 }))
-    simulation.advance(3_000_000)
-    expect(maxTwistOfKind(simulation, 'closed')).toBeLessThan(1e-6)
-    expect(maxTwistOfKind(simulation, 'active')).toBeLessThan(1e-6)
+  it('is irregular: bundles have different apex heights', () => {
+    const simulation = seeded(config({ activity: 1 }))
+    simulation.advance(30 * SECONDS_PER_DAY)
+    const apexes: number[] = []
+    for (let i = 0; i < simulation.slotCount; i++) {
+      if (simulation.slotActive(i) && simulation.slotGroup(i) === 'bundle') {
+        apexes.push(simulation.slotApex(i))
+      }
+    }
+    expect(apexes.length).toBeGreaterThan(1)
+    expect(Math.max(...apexes) - Math.min(...apexes)).toBeGreaterThan(1e-3)
+  })
+})
+
+describe('MagnetosphereSimulation reconnection', () => {
+  it('reconnects stressed loops and releases energy', () => {
+    const simulation = seeded(config({ activity: 1 }))
+    simulation.advance(120 * SECONDS_PER_DAY)
+    const diagnostics = simulation.diagnostics()
+    expect(diagnostics.reconnections).toBeGreaterThan(0)
+    expect(diagnostics.releasedEnergy).toBeGreaterThan(0)
+    expect(diagnostics.flares + diagnostics.eruptions).toBe(diagnostics.reconnections)
+  })
+
+  it('launches ejecta from eruptive events', () => {
+    const simulation = seeded(config({ activity: 1 }))
+    let sawEjecta = false
+    for (let i = 0; i < 400 && !sawEjecta; i++) {
+      simulation.advance(0.25 * SECONDS_PER_DAY)
+      if (simulation.ejectaCount > 0) sawEjecta = true
+    }
+    expect(simulation.diagnostics().eruptions).toBeGreaterThan(0)
+    expect(sawEjecta).toBe(true)
+  })
+
+  it('none at zero activity', () => {
+    const simulation = seeded(config({ activity: 0 }))
+    simulation.advance(120 * SECONDS_PER_DAY)
+    expect(simulation.diagnostics().reconnections).toBe(0)
+  })
+})
+
+describe('MagnetosphereSimulation field-strength coupling', () => {
+  it('a stronger field raises loop apex and free energy', () => {
+    const weak = seeded(config({ fieldStrength: 1, activity: 1 }))
+    const strong = seeded(config({ fieldStrength: 100, activity: 1 }))
+    weak.advance(20 * SECONDS_PER_DAY)
+    strong.advance(20 * SECONDS_PER_DAY)
+    expect(maxBundleApex(strong)).toBeGreaterThan(maxBundleApex(weak))
+    expect(strong.diagnostics().freeEnergy).toBeGreaterThan(weak.diagnostics().freeEnergy)
+    expect(strong.diagnostics().confinementRadiusMetres).toBeGreaterThan(
+      weak.diagnostics().confinementRadiusMetres,
+    )
+  })
+
+  it('does not change the shape of an isolated vacuum dipole by amplitude alone', () => {
+    // The background closed slots are geometry-only and identical regardless of
+    // field strength; only the response time (Alfvén speed) differs.
+    const weak = seeded(config({ fieldStrength: 0.01 }))
+    const strong = seeded(config({ fieldStrength: 1e4 }))
+    weak.advance(1000)
+    strong.advance(1000)
+    for (let i = 0; i < weak.slotCount; i++) {
+      if (weak.slotGroup(i) !== 'closed' || !weak.slotActive(i)) continue
+      const a = weak.slotPositions(i)
+      const b = strong.slotPositions(i)
+      expect(a.length).toBe(b.length)
+      for (let j = 0; j < a.length; j++) {
+        expect(a[j] ?? 0).toBeCloseTo(b[j] ?? 0, 6)
+      }
+    }
+  })
+})
+
+describe('MagnetosphereSimulation compact regime', () => {
+  it('evolves localised shear events into bundles and reconnections', () => {
+    const simulation = seeded(compact({ activity: 1 }))
+    simulation.advance(120 * SECONDS_PER_DAY)
+    const diagnostics = simulation.diagnostics()
+    expect(diagnostics.bundles).toBeGreaterThan(0)
+    expect(diagnostics.reconnections).toBeGreaterThan(0)
+    expect(diagnostics.regions).toBe(0)
+  })
+})
+
+describe('MagnetosphereSimulation reconnection rate limiting', () => {
+  it('keeps the event rate bounded (no cascade)', () => {
+    const simulation = seeded(config({ activity: 1 }))
+    simulation.advance(100 * SECONDS_PER_DAY)
+    expect(simulation.diagnostics().reconnections).toBeLessThan(400)
+    expect(simulation.diagnostics().releasedEnergy).toBeGreaterThan(0)
   })
 })
 
@@ -135,114 +238,19 @@ describe('MagnetosphereSimulation open lines', () => {
   it('reaches the outer field only after the wind travel time', () => {
     const simulation = seeded(config({ rotationPeriod: 25, windSpeed: 400 }))
     simulation.advance(SECONDS_PER_DAY)
-    const outerIndex = 20
-    const before = simulation.openLineNodeTwist(0, outerIndex)
+    const before = simulation.openLineNodeTwist(0, 20)
     simulation.configure(config({ rotationPeriod: 5, windSpeed: 400 }))
-    // A tiny step: the outer node has not yet seen the new rotation rate.
     simulation.advance(1)
-    expect(simulation.openLineNodeTwist(0, outerIndex)).toBeCloseTo(before, 12)
-    // After more than the travel time it has.
+    expect(simulation.openLineNodeTwist(0, 20)).toBeCloseTo(before, 12)
     simulation.advance(3 * SECONDS_PER_DAY)
-    expect(Math.abs(simulation.openLineNodeTwist(0, outerIndex))).toBeGreaterThan(Math.abs(before))
+    expect(Math.abs(simulation.openLineNodeTwist(0, 20))).toBeGreaterThan(Math.abs(before))
   })
 
   it('matches the analytic Parker winding in the wind-dominated regime', () => {
     const simulation = seeded(config({ windSpeed: 400, rotationPeriod: 25 }))
     simulation.advance(SECONDS_PER_DAY)
-    const expected = parkerWindingAngle(
-      angularVelocity(25),
-      400_000,
-      6 * SOLAR_RADIUS,
-      SOLAR_RADIUS,
-    )
+    const expected = parkerWindingAngle(angularVelocity(25), 400_000, 6 * SOLAR_RADIUS, SOLAR_RADIUS)
     expect(simulation.openLineNodeTwist(0, 48)).toBeCloseTo(expected, 6)
-  })
-})
-
-describe('MagnetosphereSimulation compact shear events', () => {
-  it('injects twist that decays once the driver stops', () => {
-    const simulation = seeded(compact({ activity: 1 }))
-    simulation.advance(4 * SECONDS_PER_DAY)
-    const peaked = simulation.diagnostics().maxTwist
-    expect(peaked).toBeGreaterThan(0)
-    expect(simulation.diagnostics().shearEvents).toBeGreaterThan(0)
-
-    simulation.configure(compact({ activity: 0 }))
-    simulation.advance(200 * SECONDS_PER_DAY)
-    expect(simulation.diagnostics().maxTwist).toBeLessThan(peaked * 0.5)
-  })
-
-  it('produces no events at zero activity', () => {
-    const simulation = seeded(compact({ activity: 0 }))
-    simulation.advance(50 * SECONDS_PER_DAY)
-    expect(simulation.diagnostics().maxTwist).toBeLessThan(1e-6)
-  })
-
-  it('is frame-rate independent across step sizes', () => {
-    const one = seeded(compact({ activity: 1 }))
-    const many = seeded(compact({ activity: 1 }))
-    one.advance(20 * SECONDS_PER_DAY)
-    for (let i = 0; i < 200; i++) many.advance(0.1 * SECONDS_PER_DAY)
-    const a = one.diagnostics().maxTwist
-    expect(a).toBeGreaterThan(0)
-    expect(a).toBeCloseTo(many.diagnostics().maxTwist, 8)
-  })
-})
-
-describe('MagnetosphereSimulation determinism', () => {
-  it('is reproducible for the same seed and steps', () => {
-    const a = seeded(config())
-    const b = seeded(config())
-    a.advance(1_000_000)
-    b.advance(1_000_000)
-    expect(a.diagnostics().maxTwist).toBeCloseTo(b.diagnostics().maxTwist, 12)
-    expect(a.diagnostics().elapsedDays).toBe(b.diagnostics().elapsedDays)
-  })
-
-  it('reset returns to a deterministic empty state', () => {
-    const a = seeded(config())
-    a.advance(1_000_000)
-    expect(a.diagnostics().maxTwist).toBeGreaterThan(0)
-    a.reset()
-    expect(a.diagnostics().elapsedDays).toBe(0)
-    expect(a.diagnostics().maxTwist).toBe(0)
-    expect(a.spinAngle).toBe(0)
-  })
-
-  it('is approximately frame-rate independent for equal simulated time', () => {
-    const oneShot = seeded(config({ activity: 0 }))
-    const manySteps = seeded(config({ activity: 0 }))
-    oneShot.advance(3000)
-    for (let i = 0; i < 30; i++) manySteps.advance(100)
-    const a = oneShot.diagnostics().maxTwist
-    const b = manySteps.diagnostics().maxTwist
-    expect(a).toBeGreaterThan(0)
-    expect(Math.abs(a - b)).toBeLessThan(0.2 * Math.max(a, b) + 1e-12)
-  })
-})
-
-describe('MagnetosphereSimulation robustness', () => {
-  it('stays finite for extreme main-sequence parameters', () => {
-    const simulation = seeded(
-      config({
-        fieldStrength: 1e4,
-        windSpeed: 1,
-        rotationPeriod: 0.05,
-        radius: 2000 * SOLAR_RADIUS,
-        temperature: 45_000,
-        regime: 'radiative',
-      }),
-    )
-    simulation.advance(1e8)
-    expect(Number.isFinite(simulation.diagnostics().maxTwist)).toBe(true)
-    expect(allPositionsFinite(simulation)).toBe(true)
-  })
-
-  it('stays finite for an extreme magnetar', () => {
-    const simulation = seeded(compact({ fieldStrength: 5e15, rotationPeriod: 1e-8, activity: 1 }))
-    simulation.advance(1e8)
-    expect(Number.isFinite(simulation.diagnostics().maxTwist)).toBe(true)
-    expect(allPositionsFinite(simulation)).toBe(true)
   })
 
   it('samples open lines by arc length without NaN', () => {
@@ -257,5 +265,66 @@ describe('MagnetosphereSimulation robustness', () => {
         expect(Number.isFinite(out[2] ?? Number.NaN)).toBe(true)
       }
     }
+  })
+})
+
+describe('MagnetosphereSimulation determinism', () => {
+  it('is reproducible for the same seed and steps', () => {
+    const a = seeded(config({ activity: 1 }))
+    const b = seeded(config({ activity: 1 }))
+    a.advance(40 * SECONDS_PER_DAY)
+    b.advance(40 * SECONDS_PER_DAY)
+    expect(a.diagnostics().maxTwist).toBeCloseTo(b.diagnostics().maxTwist, 12)
+    expect(a.diagnostics().reconnections).toBe(b.diagnostics().reconnections)
+  })
+
+  it('is frame-rate independent for equal simulated time', () => {
+    const sim30 = seeded(config({ activity: 1 }))
+    const sim144 = seeded(config({ activity: 1 }))
+    const days = 40
+    for (let i = 0; i < days * 30; i++) sim30.advance(SECONDS_PER_DAY / 30)
+    for (let i = 0; i < days * 144; i++) sim144.advance(SECONDS_PER_DAY / 144)
+    expect(sim30.diagnostics().reconnections).toBe(sim144.diagnostics().reconnections)
+    expect(sim30.diagnostics().regions).toBe(sim144.diagnostics().regions)
+    expect(sim30.bundleCount).toBe(sim144.bundleCount)
+    expect(sim30.diagnostics().maxTwist).toBeCloseTo(sim144.diagnostics().maxTwist, 2)
+  })
+
+  it('reset returns to a deterministic empty state', () => {
+    const a = seeded(config({ activity: 1 }))
+    a.advance(40 * SECONDS_PER_DAY)
+    expect(a.regionCount).toBeGreaterThan(0)
+    a.reset()
+    expect(a.diagnostics().elapsedDays).toBe(0)
+    expect(a.regionCount).toBe(0)
+    expect(a.bundleCount).toBe(0)
+    expect(a.diagnostics().maxTwist).toBe(0)
+    expect(a.reconnectionCounts.reconnections).toBe(0)
+  })
+})
+
+describe('MagnetosphereSimulation robustness', () => {
+  it('stays finite for extreme main-sequence parameters', () => {
+    const simulation = seeded(
+      config({
+        fieldStrength: 1e4,
+        windSpeed: 1,
+        rotationPeriod: 0.05,
+        radius: 2000 * SOLAR_RADIUS,
+        temperature: 45_000,
+        activity: 1,
+        regime: 'radiative',
+      }),
+    )
+    simulation.advance(1e8)
+    expect(Number.isFinite(simulation.diagnostics().maxTwist)).toBe(true)
+    expect(allPositionsFinite(simulation)).toBe(true)
+  })
+
+  it('stays finite for an extreme magnetar', () => {
+    const simulation = seeded(compact({ fieldStrength: 5e15, rotationPeriod: 1e-8, activity: 1 }))
+    simulation.advance(1e8)
+    expect(Number.isFinite(simulation.diagnostics().maxTwist)).toBe(true)
+    expect(allPositionsFinite(simulation)).toBe(true)
   })
 })

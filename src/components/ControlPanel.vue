@@ -263,6 +263,24 @@ const fieldElapsedDisplay = computed(() => {
   return days >= 365 ? `${(days / 365).toFixed(1)} yr` : `${days.toFixed(1)} d`
 })
 
+const eventFocus = computed({
+  get: () => magnetosphere.eventFocus,
+  set: (value) => magnetosphere.setEventFocus(value),
+})
+
+const fieldConfinementDisplay = computed(() => {
+  const metres = magnetosphere.confinementRadiusMetres
+  const radius = stats.value.radius
+  if (!(metres > 0) || !(radius > 0)) return '—'
+  return `${(metres / radius).toFixed(1)} R★`
+})
+
+const fieldBetaDisplay = computed(() => magnetosphere.plasmaBeta.toExponential(1))
+
+const fieldFreeEnergyDisplay = computed(() => `${magnetosphere.freeEnergy.toExponential(1)} J`)
+
+const fieldReleasedEnergyDisplay = computed(() => `${magnetosphere.releasedEnergy.toExponential(1)} J`)
+
 // --- Display helpers --------------------------------------------------------
 const temperatureDisplay = computed(() => `${Math.round(stats.value.temperature).toLocaleString()} K`)
 const densityDisplay = computed(() => `${stats.value.density.toExponential(2)} kg/m³`)
@@ -608,28 +626,40 @@ const isLensed = computed(() => star.type.surface === 'lensed')
         />
       </div>
 
+      <label class="check" :class="{ disabled: !fieldEnabled }">
+        <input type="checkbox" :disabled="!fieldEnabled" :checked="eventFocus" @change="eventFocus = !eventFocus" />
+        Slow time during events (event focus)
+      </label>
+
       <p class="derived">
-        Regime <strong>{{ magnetosphere.regime }}</strong> · max loop twist
+        Regime <strong>{{ magnetosphere.regime }}</strong> · {{ magnetosphere.regions }} regions /
+        <strong>{{ magnetosphere.bundles }}</strong> bundles · max loop twist
         <strong>{{ maxTwistDegrees.toFixed(0) }}°</strong> · open winding
-        <strong>{{ maxOpenWindingDegrees.toFixed(0) }}°</strong> · Alfvén crossing
+        <strong>{{ maxOpenWindingDegrees.toFixed(0) }}°</strong>
+      </p>
+      <p class="derived">
+        Reconnections <strong>{{ magnetosphere.reconnections }}</strong> · flares
+        <strong>{{ magnetosphere.flares }}</strong> · eruptions
+        <strong>{{ magnetosphere.eruptions }}</strong> · ejecta in flight
+        <strong>{{ magnetosphere.activeEjecta }}</strong>
+      </p>
+      <p class="derived">
+        p<sub>B</sub> <strong>{{ magnetosphere.magneticPressure.toExponential(1) }} Pa</strong> · wind ram
+        <strong>{{ magnetosphere.windRamPressure.toExponential(1) }} Pa</strong> · β
+        <strong>{{ fieldBetaDisplay }}</strong> · confinement <strong>{{ fieldConfinementDisplay }}</strong> · Alfvén crossing
         <strong>{{ fieldCrossingDisplay }}</strong>
       </p>
       <p class="derived">
-        {{ magnetosphere.lineCount }} lines ({{ magnetosphere.openLineCount }} open)<template
-          v-if="magnetosphere.differentialRotation"
-        >
-          · footpoints shear with differential rotation</template
-        ><template v-else>
-          · localised shear events in flight: <strong>{{ magnetosphere.shearEvents }}</strong></template
-        >
+        Free magnetic energy <strong>{{ fieldFreeEnergyDisplay }}</strong> · released
+        <strong>{{ fieldReleasedEnergyDisplay }}</strong>
       </p>
       <p v-if="magnetosphere.exceedsLightCylinder" class="derived warn">
         ⚠ Open field extends beyond the light cylinder; the closed-dipole picture is not valid there.
       </p>
       <p class="derived">
-        Field time elapsed <strong>{{ fieldElapsedDisplay }}</strong>. Closed loops shear only when their two footpoints
-        rotate at different rates, so a symmetric dipole stays put; open lines wind into a Parker spiral with the wind
-        travel time. Independent of stellar aging.
+        Field time elapsed <strong>{{ fieldElapsedDisplay }}</strong>. Bipolar regions emerge, drift and decay; their loops
+        shear, then reconnect — swapping connectivity, contracting in confined flares or flinging material out in
+        eruptions. A stronger field raises the confinement radius, tension, energy and response speed.
       </p>
     </section>
 

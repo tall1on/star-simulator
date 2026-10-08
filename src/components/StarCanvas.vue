@@ -108,6 +108,7 @@ function syncField(): void {
     typeId: typeId.value,
     activity: magnetosphere.activity,
     regime: magnetosphereRegime(typeId.value, stats.value.temperature),
+    eventFocus: magnetosphere.eventFocus,
   })
 }
 
@@ -334,7 +335,12 @@ watch(lensFlareEnabled, (value) => post?.setLensFlareEnabled(value))
 watch(() => view.toneMapping, (value) => post?.setToneMapping(value))
 watch(() => view.fitRequestId, () => controls?.fitStar(currentSceneRadius()))
 watch(
-  () => [windParams.value.tilt, windParams.value.speed, windParams.value.rotationPeriod],
+  () => [
+    windParams.value.tilt,
+    windParams.value.speed,
+    windParams.value.rotationPeriod,
+    windParams.value.massLossRate,
+  ],
   () => {
     syncField()
     syncPulsar()
@@ -382,6 +388,7 @@ watch(
     magnetosphere.running,
     magnetosphere.timeScaleDaysPerSecond,
     magnetosphere.activity,
+    magnetosphere.eventFocus,
   ],
   () => syncField(),
 )

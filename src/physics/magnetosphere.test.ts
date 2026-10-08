@@ -4,13 +4,21 @@ import {
   alfvenCrossingSeconds,
   alfvenSpeed,
   angularVelocity,
+  confinementRadiusMetres,
+  coronalPlasmaPressure,
   footpointShearRate,
+  freeMagneticEnergy,
   gaussToTesla,
   lightCylinderRadiusMetres,
+  magneticPressure,
+  magneticTensionForceDensity,
   magnetosphereRegime,
   parkerWindingAngle,
+  plasmaBeta,
   plasmaDensityForRegime,
+  reconnectionRate,
   supportsDifferentialRotation,
+  windRamPressure,
 } from '@/physics/magnetosphere'
 import { SECONDS_PER_DAY, SOLAR_RADIUS } from '@/physics/relations'
 
@@ -34,6 +42,66 @@ describe('alfvenSpeed', () => {
 
   it('increases with field strength', () => {
     expect(alfvenSpeed(100, 1e-12)).toBeGreaterThan(alfvenSpeed(1, 1e-12))
+  })
+})
+
+describe('magnetic pressure, beta and tension', () => {
+  it('magnetic pressure is B²/(2μ₀)', () => {
+    expect(magneticPressure(1)).toBeCloseTo(1e-8 / (2 * 4e-7 * Math.PI), 12)
+  })
+
+  it('scales with the square of the field', () => {
+    expect(magneticPressure(10) / magneticPressure(1)).toBeCloseTo(100, 6)
+  })
+
+  it('plasma beta falls as the field strengthens', () => {
+    const pressure = coronalPlasmaPressure()
+    expect(plasmaBeta(pressure, 1)).toBeGreaterThan(plasmaBeta(pressure, 100))
+    expect(plasmaBeta(pressure, 1000)).toBeGreaterThan(0)
+  })
+
+  it('tension is proportional to magnetic pressure over curvature radius', () => {
+    expect(magneticTensionForceDensity(1, 1e8)).toBeCloseTo((2 * magneticPressure(1)) / 1e8, 12)
+    expect(magneticTensionForceDensity(10, 1e8)).toBeGreaterThan(magneticTensionForceDensity(1, 1e8))
+  })
+
+  it('reconnection rate is a fraction of the Alfvén speed', () => {
+    const rate = reconnectionRate(1e6)
+    expect(rate).toBeGreaterThan(0)
+    expect(rate).toBeLessThan(1e6)
+  })
+})
+
+describe('wind ram pressure and confinement radius', () => {
+  it('ram pressure falls with distance', () => {
+    const inner = windRamPressure(2e-14, 400_000, SOLAR_RADIUS)
+    const outer = windRamPressure(2e-14, 400_000, 5 * SOLAR_RADIUS)
+    expect(outer).toBeLessThan(inner)
+  })
+
+  it('a stronger field places the confinement radius further out', () => {
+    const weak = confinementRadiusMetres(SOLAR_RADIUS, 1, 2e-14, 400_000)
+    const strong = confinementRadiusMetres(SOLAR_RADIUS, 100, 2e-14, 400_000)
+    expect(strong).toBeGreaterThan(weak)
+    expect(weak).toBeGreaterThan(SOLAR_RADIUS)
+  })
+
+  it('a heavier wind pulls the confinement radius inward', () => {
+    const lightWind = confinementRadiusMetres(SOLAR_RADIUS, 1, 1e-15, 400_000)
+    const heavyWind = confinementRadiusMetres(SOLAR_RADIUS, 1, 1e-12, 400_000)
+    expect(heavyWind).toBeLessThan(lightWind)
+  })
+})
+
+describe('free magnetic energy', () => {
+  it('is zero for an unstressed tube and grows with shear²', () => {
+    const volume = 1e27
+    expect(freeMagneticEnergy(1, volume, 0)).toBe(0)
+    expect(freeMagneticEnergy(1, volume, 2) / freeMagneticEnergy(1, volume, 1)).toBeCloseTo(4, 6)
+  })
+
+  it('is larger for a stronger field', () => {
+    expect(freeMagneticEnergy(100, 1e27, 1)).toBeGreaterThan(freeMagneticEnergy(1, 1e27, 1))
   })
 })
 

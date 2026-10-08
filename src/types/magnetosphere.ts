@@ -1,15 +1,17 @@
 import type { StarTypeId } from '@/types/star'
 
 /**
- * Field-line topology class. Closed loops are anchored to the stellar surface
- * at both ends; open lines are dragged into a Parker spiral by the wind.
+ * Field-line topology class. Closed loops are the smooth background dipole;
+ * bundles are localised loops anchored at evolving bipolar regions; open lines
+ * are dragged into a Parker spiral; ejecta are transient escaping structures.
  */
-export type FieldLineKind = 'closed' | 'active' | 'open'
+export type FieldLineKind = 'closed' | 'open' | 'bundle' | 'ejecta'
 
 /**
- * Which reduced-order magnetosphere model applies to a star. This only selects
- * the *drivers* (differential footpoint rotation vs. localised shear events);
- * the line topology is shared so switching regime never snaps the geometry.
+ * Which reduced-order magnetosphere model applies to a star. This selects the
+ * *drivers* (differential rotation + turbulent surface motion vs. localised
+ * shear events); the rendering pool is shared so switching regime never snaps
+ * the geometry.
  */
 export type MagnetosphereRegime = 'convective' | 'radiative' | 'compact'
 
@@ -24,7 +26,7 @@ export interface MagnetosphereConfig {
   running: boolean
   /** Playback acceleration: simulated days advanced per real second. */
   timeScaleDaysPerSecond: number
-  /** Surface field strength in gauss. */
+  /** Surface field strength in gauss (characteristic amplitude). */
   fieldStrength: number
   /** Stellar wind speed in km/s. */
   windSpeed: number
@@ -39,25 +41,53 @@ export interface MagnetosphereConfig {
   /** Effective surface temperature in kelvin (selects the regime). */
   temperature: number
   typeId: StarTypeId
-  /** Activity level 0…1 driving active-region shear and compact shear events. */
+  /** Activity level 0…1 driving region emergence, forcing and compact events. */
   activity: number
   regime: MagnetosphereRegime
+  /**
+   * When true, simulated time is temporarily slowed while a reconnection or
+   * eruption is in flight so the fast event stays visible. Clearly a playback
+   * control (no hidden amplification of displacement or energy).
+   */
+  eventFocus: boolean
 }
 
 /** Live, throttled diagnostics surfaced to the UI. */
 export interface MagnetosphereDiagnostics {
-  /** Largest absolute torsional displacement of a closed/active loop, radians. */
+  /** Largest absolute torsional displacement of a closed/bundle loop, radians. */
   maxTwist: number
   /** Largest absolute Parker winding of an open line, radians. */
   maxOpenWinding: number
-  /** Alfvén crossing time of the longest closed tube, seconds. */
+  /** Alfvén crossing time of the longest closed loop, seconds. */
   alfvenCrossingSeconds: number
-  /** Number of simulated field lines (closed + active + open). */
+  /** Active lines currently rendered (closed + bundles + ejecta + open). */
   lineCount: number
   /** Open lines currently represented. */
   openLineCount: number
-  /** Localised shear events still in flight (compact regime only). */
-  shearEvents: number
+  /** Evolving bipolar magnetic regions currently alive. */
+  regions: number
+  /** Dynamic flux-tube bundles currently alive. */
+  bundles: number
+  /** Cumulative reconnectivity events since reset. */
+  reconnections: number
+  /** Cumulative confined flares (no ejecta) since reset. */
+  flares: number
+  /** Cumulative eruptive events (with ejecta) since reset. */
+  eruptions: number
+  /** Ejecta structures currently in flight. */
+  activeEjecta: number
+  /** Free magnetic energy currently stored in stressed bundles, J. */
+  freeEnergy: number
+  /** Cumulative magnetic energy released by reconnection, J. */
+  releasedEnergy: number
+  /** Magnetic pressure at the surface field strength, Pa. */
+  magneticPressure: number
+  /** Wind ram pressure at one stellar radius, Pa. */
+  windRamPressure: number
+  /** Plasma beta at the surface field strength. */
+  plasmaBeta: number
+  /** Modelled confinement radius, metres. */
+  confinementRadiusMetres: number
   /** Simulated time elapsed since reset, days. */
   elapsedDays: number
   regime: MagnetosphereRegime
