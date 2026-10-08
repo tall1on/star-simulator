@@ -3,9 +3,13 @@ import StarCanvas from '@/components/StarCanvas.vue'
 import ControlPanel from '@/components/ControlPanel.vue'
 import StarTypeSelector from '@/components/StarTypeSelector.vue'
 import ViewModeToggle from '@/components/ViewModeToggle.vue'
+import AudioControls from '@/components/AudioControls.vue'
+import { useStarAmbience } from '@/composables/useStarAmbience'
 import { useViewStore } from '@/stores/view'
 
 const view = useViewStore()
+
+useStarAmbience()
 </script>
 
 <template>
@@ -15,6 +19,7 @@ const view = useViewStore()
       <div class="hud">
         <StarTypeSelector />
         <ViewModeToggle />
+        <AudioControls compact />
         <span class="renderer">{{ view.backend ?? 'initializing…' }} · {{ view.fps }} fps</span>
       </div>
     </main>

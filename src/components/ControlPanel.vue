@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import AudioControls from '@/components/AudioControls.vue'
 import { useStarStore } from '@/stores/star'
 import { useSimulationStore } from '@/stores/simulation'
 import { useSunspotStore } from '@/stores/sunspots'
@@ -720,6 +721,8 @@ const isLensed = computed(() => star.type.surface === 'lensed')
         <strong>{{ altitudeDisplay }}</strong>. Scroll to zoom, drag to orbit.
       </p>
     </section>
+
+    <AudioControls />
   </div>
 </template>
 
